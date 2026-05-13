@@ -315,7 +315,7 @@ class DataSet:
             self.data_split['train'][p_key] -= p_mean
             self.data_split['valid'][p_key] -= p_mean
             self.data_split['test'][p_key] -= p_mean
-            self.scales[x]['per_atom_shift'] = [0] + [p_mean / n_atoms] * 100
+            self.scales[x]['per_atom_shift'] = [0] + [float(p_mean / n_atoms)] * 100
             self.track_shift_x_by_mean_x += [x]
 
     def divide_x_by_std_y(self, x, y):
@@ -328,7 +328,7 @@ class DataSet:
             self.data_split['train'][x_key] /= y_scale
             self.data_split['valid'][x_key] /= y_scale
             self.data_split['test'][x_key] /= y_scale
-            self.scales[x]['scale'] = y_scale.item()
+            self.scales[x]['scale'] = float(y_scale.item())
             self.track_divide_x_by_std_y += [x]
 
     def shift_x_by_type(self, x, shifts=None):
@@ -360,7 +360,7 @@ class DataSet:
                                                            self.data_split['valid'][z_key]).reshape(
                 self.data_split['valid'][x_key].shape)
 
-            self.scales[x]['per_atom_shift'] = shifts_arr.reshape(-1).tolist()
+            self.scales[x]['per_atom_shift'] = [float(x) for x in shifts_arr.reshape(-1).tolist()]
             self.track_shift_x_by_type += [x]
 
     def shift_x_by_type_lse(self, x):
@@ -385,7 +385,7 @@ class DataSet:
                                                            self.data_split['valid'][z_key]).reshape(
                 self.data_split['valid'][x_key].shape)
 
-            self.scales[x]['per_atom_shift'] = shifts.reshape(-1).tolist()
+            self.scales[x]['per_atom_shift'] = [float(x) for x in shifts.reshape(-1).tolist()]
             self.track_shift_x_by_type += [x]
 
     def get_data_split(self):
