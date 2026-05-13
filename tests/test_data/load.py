@@ -1,4 +1,4 @@
-import pkg_resources
+import importlib.resources as importlib_resources
 from pathlib import Path
 
 
@@ -6,9 +6,15 @@ def load_data(filename):
     p_filename = Path(filename)
     if p_filename.suffix == '.npz':
         import numpy as np
-        stream = pkg_resources.resource_stream(__name__, filename)
-        return np.load(stream)
+        ref = importlib_resources.files(__name__).joinpath(filename)
+        # The np.load object keeps seeking the file pointer, hence we need to keep it open
+        # with ref.open('rb') as fp:
+        #     return np.load(fp)
+        return np.load(ref.open('rb'))
     else:
         from ase.io import iread
-        f = pkg_resources.resource_filename(__name__, filename)
-        return iread(f, ':')
+        ref = importlib_resources.files(__name__).joinpath(filename)
+        # The iread iterator keeps seeking the file pointer, hence we need to keep it open
+        # with importlib_resources.as_file(ref) as f:
+        #     return iread(f, ':')
+        return iread(ref.name, ':')
