@@ -17,4 +17,4 @@ def load_data(filename):
         # The iread iterator keeps seeking the file pointer, hence we need to keep it open
         # with importlib_resources.as_file(ref) as f:
         #     return iread(f, ':')
-        return iread(ref.name, ':')
+        return iread(ref.open('rb'), ':')

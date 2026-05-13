@@ -7,7 +7,7 @@ authors = [
     { name = "Thorben Frank" },
     { name = "Kevin Höllring", email = "kevin.hoellring@fau.de" },
 ]
-name = "cpc-mlff"
+name = "cpc_mlff"
 version = "2026.5.1"
 description = "Build Neural Networks for Machine-Learned Force Fields with JAX. Upgraded version provided by the Computational PhotoChemistry group at the CCC in Erlangen."
 readme = { file = "README.md", content-type = "text/markdown" }
