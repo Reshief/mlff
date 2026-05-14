@@ -6,7 +6,7 @@ import os
 import argparse
 import wandb
 import json
-import portpicker
+import sys
 
 from pathlib import Path
 from typing import Dict
@@ -24,8 +24,10 @@ from mlff.properties import md17_property_keys
 import mlff.properties.property_names as pn
 
 # logging.basicConfig(level=logging.INFO)
-port = portpicker.pick_unused_port()
-jax.distributed.initialize(f'localhost:{port}', num_processes=1, process_id=0)
+if sys.platform != "win32":
+    import portpicker
+    port = portpicker.pick_unused_port()
+    jax.distributed.initialize(f'localhost:{port}', num_processes=1, process_id=0)
 
 
 def unit_convert_data(x: Dict, table: Dict):
