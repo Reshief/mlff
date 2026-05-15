@@ -251,7 +251,7 @@ def evaluate():
 
         # Ensure that we have set the n_test variable if it is still None
         if n_test is None:
-            n_test = test_data_set.data[prop_keys['atomic_positions']].shape[0]
+            n_test = test_data_set.data[prop_keys['atomic_position']].shape[0]
 
         test_data_set.index_split(data_idx_train=[],
                                   data_idx_valid=[],
