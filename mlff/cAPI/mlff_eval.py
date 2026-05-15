@@ -249,6 +249,10 @@ def evaluate():
         test_data = unit_convert_data(test_data, table=conversion_table)
         test_data_set = DataSet(prop_keys=prop_keys, data=test_data)
 
+        # Ensure that we have set the n_test variable if it is still None
+        if n_test is None:
+            n_test = test_data_set.data[prop_keys['atomic_positions']].shape[0]
+
         test_data_set.index_split(data_idx_train=[],
                                   data_idx_valid=[],
                                   data_idx_test=np.arange(n_test),
