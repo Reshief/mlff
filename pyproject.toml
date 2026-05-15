@@ -19,7 +19,7 @@ dependencies = [
     "jaxopt",
     "jraph",
     "optax",
-    "orbax-checkpoint == 0.11.5",
+    "orbax-checkpoint == 0.11.39",
     "portpicker",
     "importlib",
     # 'tensorflow',
@@ -57,18 +57,18 @@ mlff = ["sph_ops/cgmatrix.npz", "sph_ops/u_matrix.pickle"]
 conflicts = [
     [
         { extra = "cpu" },
-        #{ extra = "cu11" },
+        { extra = "cu11" },
         { extra = "cu12" },
-        #{ extra = "cu13" },
+        { extra = "cu13" },
     ],
 ]
 
 [project.optional-dependencies]
-cpu = ["jax==0.6.0"]
-tpu = ["jax[tpu]==0.6.0"]
-cu12 = ["jax[cuda12]==0.6.0"]
-#cu13 = ["jax[cuda13]==0.6.0"]
-#cu11 = ["jax[cuda11]==0.6.0"]
+cpu = ["jax==0.10.0"]
+tpu = ["jax[tpu]==0.10.0"]
+cu12 = ["jax[cuda12]==0.10.0"]
+cu13 = ["jax[cuda13]==0.10.0"]
+cu11 = ["jax[cuda11]==0.10.0"]
 
 [project.scripts]
 evaluate = "mlff.cAPI.mlff_eval:evaluate"
