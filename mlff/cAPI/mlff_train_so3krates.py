@@ -21,6 +21,7 @@ from mlff.nn import So3krates
 from mlff.nn.observable import Energy
 from mlff.data import AseDataLoader
 from mlff.properties import md17_property_keys
+import random
 
 import mlff.properties.property_names as pn
 
@@ -128,9 +129,9 @@ def train_so3krates():
                              'if the model has been trained on units different from the ones present in the data set.')
 
     # Training arguments
-    parser.add_argument('--model_seed', type=int, required=False, default=0)
-    parser.add_argument('--data_seed', type=int, required=False, default=0)
-    parser.add_argument('--training_seed', type=int, required=False, default=0)
+    parser.add_argument('--model_seed', type=int, required=False, default=None)
+    parser.add_argument('--data_seed', type=int, required=False, default=None)
+    parser.add_argument('--training_seed', type=int, required=False, default=None)
 
     parser.add_argument('--targets', nargs='+', required=False, default=[pn.energy, pn.force])
     parser.add_argument('--inputs', nargs='+', required=False, default=[pn.atomic_type,
@@ -253,10 +254,13 @@ def train_so3krates():
         if n_train is None or n_valid is None:
             raise ValueError('If only a single `--data_file` is provided, please specify the number of training'
                              'and validation samples via `--n_train` and `--n_valid`.')
+        
+    random.seed()
+    maxint =np.iinfo(np.int32).max
 
-    model_seed = args.model_seed
-    training_seed = args.training_seed
-    data_seed = args.data_seed
+    model_seed = args.model_seed if args.model_seed is not None else random.randint(0, maxint)
+    training_seed = args.training_seed if args.training_seed is not None else random.randint(0, maxint)
+    data_seed = args.data_seed if args.data_seed is not None else random.randint(0, maxint)
 
     units = args.units
     conversion_table = {}

@@ -7,6 +7,7 @@ import argparse
 import wandb
 import json
 import sys
+import random
 
 from pathlib import Path
 from typing import Dict
@@ -112,9 +113,9 @@ def train_so3kratace():
                              'if the model has been trained on units different from the ones present in the data set.')
 
     # Training arguments
-    parser.add_argument('--model_seed', type=int, required=False, default=0)
-    parser.add_argument('--data_seed', type=int, required=False, default=0)
-    parser.add_argument('--training_seed', type=int, required=False, default=0)
+    parser.add_argument('--model_seed', type=int, required=False, default=None)
+    parser.add_argument('--data_seed', type=int, required=False, default=None)
+    parser.add_argument('--training_seed', type=int, required=False, default=None)
 
     parser.add_argument('--targets', nargs='+', required=False, default=[pn.energy, pn.force])
     parser.add_argument('--inputs', nargs='+', required=False, default=[pn.atomic_type,
@@ -210,9 +211,12 @@ def train_so3kratace():
     n_train = args.n_train
     n_valid = args.n_valid
     n_test = args.n_test
-    model_seed = args.model_seed
-    training_seed = args.training_seed
-    data_seed = args.data_seed
+    random.seed()
+    maxint =np.iinfo(np.int32).max
+
+    model_seed = args.model_seed if args.model_seed is not None else random.randint(0, maxint)
+    training_seed = args.training_seed if args.training_seed is not None else random.randint(0, maxint)
+    data_seed = args.data_seed if args.data_seed is not None else random.randint(0, maxint)
 
     def autoset_batch_size(u):
         if u < 500:
