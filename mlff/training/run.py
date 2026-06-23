@@ -8,9 +8,7 @@ import optax
 
 from orbax.checkpoint import (CheckpointManagerOptions,
                               CheckpointManager,
-                              PyTreeCheckpointer,
-                              PyTreeCheckpointHandler,
-                              AsyncCheckpointer)
+                              PyTreeCheckpointer)
 
 from functools import partial
 from typing import (Any, Callable, Dict, Tuple)
@@ -82,8 +80,8 @@ def valid_epoch(state: TrainState,
         batch_metrics.append(metrics)
 
     # compute mean of metrics across each batch in epoch.
-    batch_metrics_np = jax.device_get(batch_metrics)
-    epoch_metrics_np = {k: np.mean([metrics[k] for metrics in batch_metrics_np]) for k in batch_metrics_np[0]}
+    # batch_metrics_np = jax.device_get(batch_metrics)
+    epoch_metrics_np = {k: np.mean([metrics[k] for metrics in batch_metrics]) for k in batch_metrics[0]}
     return epoch_metrics_np, n_data
 
 
@@ -182,8 +180,8 @@ def run_training(state: TrainState,
     options = CheckpointManagerOptions(best_fn=lambda u: u['loss'], best_mode='min', step_prefix=__STEP_PREFIX__,
                                        **ckpt_manager_options)
 
-    mngr = CheckpointManager(ckpt_dir, {'state': AsyncCheckpointer(PyTreeCheckpointHandler())}, options=options)
-    # mngr = CheckpointManager(ckpt_dir, {'state': PyTreeCheckpointer()}, options=options)
+    # mngr = CheckpointManager(ckpt_dir, {'state': AsyncCheckpointer(PyTreeCheckpointHandler())}, options=options)
+    mngr = CheckpointManager(ckpt_dir, {'state': PyTreeCheckpointer()}, options=options)
 
     for i in range(1, int(steps_per_epoch * epochs) + 1):
         epoch_start = time.time()
@@ -210,7 +208,7 @@ def run_training(state: TrainState,
         train_end = time.time()
 
         # check for NaN
-        train_batch_metrics_np = jax.device_get(train_batch_metrics)
+        train_batch_metrics_np = jax.tree_map(lambda x: np.array(x), train_batch_metrics)
 
         if (np.isnan(train_batch_metrics_np['loss']) or
             np.isinf(train_batch_metrics_np['loss']) or
@@ -225,7 +223,7 @@ def run_training(state: TrainState,
                 logging.warning(f'NaN detected during training in step {i} in gradient values. Reload the '
                                 'last checkpoint.')
 
-            grads_np = jax.tree.map(lambda x: x.tolist(), jax.device_get(grads))
+            grads_np = jax.tree_util.tree_map(lambda x: np.array(x).tolist(), grads)
             save_dict(ckpt_dir, filename=f'gradients_nan_step_{i}.json', data=unfreeze(grads_np), exists_ok=True)
 
             def reset_records():
@@ -314,4 +312,4 @@ def run_training(state: TrainState,
             if (i > 1) and (i % log_every_t == 0):
                 if use_wandb:
                     wandb.log(times, step=i)
-    mngr.wait_until_finished()
+    # mngr.wait_until_finished()
