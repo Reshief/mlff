@@ -54,6 +54,9 @@ def load_model_from_workdir(
         cfg.model.cutoff_lr = cutoff_lr
         cfg.neighborlist_format_lr = neighborlist_format
 
+        cfg.electrostatic_energy_kspace_do_ewald_bool = long_range_kwargs.get('coulomb_kspace_do_ewald', False)
+        cfg.electrostatic_energy_kspace_interp_nodes = int(long_range_kwargs.get('coulomb_kspace_interp_nodes', 4))
+
         if dispersion_energy_bool is True:
             dispersion_energy_cutoff_lr_damping = long_range_kwargs['dispersion_energy_cutoff_lr_damping']
             if cutoff_lr is not None:
@@ -102,6 +105,28 @@ def load_model_from_workdir(
         raise ValueError(
             f'{model=} is not a valid model.'
         )
+
+    if 'energy_offset' in params['params']['observables_0']:
+        # Change shapes to allow for multiple theory levels, only needed for https://github.com/kabylda/mlff/tree/v1.0-tfds version
+        num_theory_levels=16
+        old_energy_offset = params['params']['observables_0']['energy_offset']
+        if len(old_energy_offset.shape) == 1:
+            # print("\nOriginal energy_offset:")
+            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+            params['params']['observables_0']['energy_offset'] = new_energy_offset
+
+            old_atomic_scales = params['params']['observables_0']['atomic_scales']
+            new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+            params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+
+            old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+            new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+            params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+
+            # print("\nNew energy_offset:")
+            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            # print("Values:", params['params']['observables_0']['energy_offset'])
 
     return net, params
 
@@ -185,6 +210,29 @@ class MLFFPotentialSparse(MachineLearningPotential):
             output_intermediate_quantities=output_intermediate_quantities
         )
 
+        if 'energy_offset' in params['params']['observables_0']:
+            # Change shapes to allow for multiple theory levels, only needed for https://github.com/kabylda/mlff/tree/v1.0-tfds-pme version
+            num_theory_levels=16
+            old_energy_offset = params['params']['observables_0']['energy_offset']
+            if len(old_energy_offset.shape) == 1:
+                # print("\nOriginal energy_offset:")
+                # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+                new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+                params['params']['observables_0']['energy_offset'] = new_energy_offset
+
+                old_atomic_scales = params['params']['observables_0']['atomic_scales']
+                new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+                params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+
+                old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+                new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+                params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+
+                # print("\nNew energy_offset:")
+                # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+                # print("Values:", params['params']['observables_0']['energy_offset'])
+
+
         cfg = load_hyperparameters(workdir=workdir)
 
         net.reset_input_convention('displacements')
@@ -225,6 +273,11 @@ class MLFFPotentialSparse(MachineLearningPotential):
                 'total_charge': graph.total_charge,
                 'num_unpaired_electrons': graph.num_unpaired_electrons,
                 'cell': getattr(graph, 'cell', None),
+                'theory_mask': graph.theory_mask,
+                'k_grid': getattr(graph, 'k_grid', None),
+                'k_smearing': getattr(graph, 'k_smearing', None),
+                'residue_charge': getattr(graph, 'residue_charge', None),
+                'residue_segments': getattr(graph, 'residue_segments', None),
             }
             if long_range_bool is True:
                 x_lr = {

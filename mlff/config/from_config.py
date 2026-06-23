@@ -14,6 +14,9 @@ import yaml
 import logging
 import os
 from functools import partial, partialmethod
+import jax.numpy as jnp
+import jax
+import flax
 
 from ..utils import checkpoint_utils
 
@@ -68,12 +71,15 @@ def make_so3krates_sparse_from_config(
         energy_learn_atomic_type_scales=model_config.energy_learn_atomic_type_scales,
         energy_learn_atomic_type_shifts=model_config.energy_learn_atomic_type_shifts,
         electrostatic_energy_bool=model_config.electrostatic_energy_bool,
+        electrostatic_energy_kspace_do_ewald_bool = getattr(config, 'electrostatic_energy_kspace_do_ewald_bool', None),
+        electrostatic_energy_kspace_interp_nodes = getattr(config, 'electrostatic_energy_kspace_interp_nodes', 4),
         electrostatic_energy_scale=model_config.electrostatic_energy_scale,
         dispersion_energy_bool=model_config.dispersion_energy_bool,
         dispersion_energy_cutoff_lr_damping=model_config.dispersion_energy_cutoff_lr_damping,
         dispersion_energy_scale=model_config.dispersion_energy_scale,
         return_representations_bool=return_representations_bool,
         zbl_repulsion_bool=model_config.zbl_repulsion_bool,
+        use_final_bias_bool=model_config.get('use_final_bias_bool', True),
         neighborlist_format_lr=config.neighborlist_format_lr,
         output_intermediate_quantities=output_intermediate_quantities,
     )
@@ -96,6 +102,8 @@ def make_itp_net_from_config(config: config_dict.ConfigDict):
         radial_basis_fn=model_config.radial_basis_fn,
         num_radial_basis_fn=model_config.num_radial_basis_fn,
         cutoff_fn=model_config.cutoff_fn,
+        cutoff=model_config.cutoff,
+        cutoff_lr=model_config.cutoff_lr,
         filter_num_layers=model_config.filter_num_layers,
         filter_activation_fn=model_config.filter_activation_fn,
         mp_max_degree=model_config.mp_max_degree,
@@ -109,10 +117,10 @@ def make_itp_net_from_config(config: config_dict.ConfigDict):
         itp_connectivity=model_config.itp_connectivity,
         itp_growth_rate=model_config.itp_growth_rate,
         itp_dense_final_concatenation=model_config.itp_dense_final_concatenation,
-        feature_collection_over_layers=model_config.feature_collection_over_layers,
-        include_pseudotensors=model_config.include_pseudotensors,
         message_normalization=config.model.message_normalization,
         avg_num_neighbors=config.data.avg_num_neighbors if config.model.message_normalization == 'avg_num_neighbors' else None,
+        feature_collection_over_layers=model_config.feature_collection_over_layers,
+        include_pseudotensors=model_config.include_pseudotensors,
         output_is_zero_at_init=model_config.output_is_zero_at_init,
         input_convention=model_config.input_convention,
         use_charge_embed=model_config.use_charge_embed,
@@ -124,8 +132,11 @@ def make_itp_net_from_config(config: config_dict.ConfigDict):
         electrostatic_energy_bool=model_config.electrostatic_energy_bool,
         electrostatic_energy_scale=model_config.electrostatic_energy_scale,
         dispersion_energy_bool=model_config.dispersion_energy_bool,
+        dispersion_energy_cutoff_lr_damping=model_config.dispersion_energy_cutoff_lr_damping,
         dispersion_energy_scale=model_config.dispersion_energy_scale,
-        zbl_repulsion_bool=model_config.zbl_repulsion_bool
+        zbl_repulsion_bool=model_config.zbl_repulsion_bool,
+        use_final_bias_bool=model_config.get('use_final_bias_bool', True),
+        neighborlist_format_lr=config.neighborlist_format_lr,
     )
 
 
@@ -220,7 +231,16 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
 
     loss_fn = training_utils.make_loss_fn(
         get_energy_and_force_fn_sparse(net),
-        weights=config.training.loss_weights
+        weights=config.training.loss_weights,
+        use_robust_loss=config.training.get('use_robust_loss', False),
+        robust_loss_alpha=config.training.get('robust_loss_alpha', 1.99),
+    )
+
+    val_fn = training_utils.make_val_fn(
+        get_energy_and_force_fn_sparse(net),
+        weights=config.training.loss_weights,
+        use_robust_loss=config.training.get('use_robust_loss_validation', False),
+        robust_loss_alpha=config.training.get('robust_loss_alpha_validation', 1.99)
     )
 
     if config.training.batch_max_num_nodes is None:
@@ -281,6 +301,7 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             model=net,
             optimizer=opt,
             loss_fn=loss_fn,
+            val_fn=val_fn,
             graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
             batch_max_num_edges=config.training.batch_max_num_edges,
             batch_max_num_nodes=config.training.batch_max_num_nodes,
@@ -302,6 +323,7 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             model=net,
             optimizer=opt,
             loss_fn=loss_fn,
+            val_fn=val_fn,
             graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
             batch_max_num_edges=config.training.batch_max_num_edges,
             batch_max_num_nodes=config.training.batch_max_num_nodes,
@@ -315,6 +337,7 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             training_seed=config.training.training_seed,
             model_seed=config.training.model_seed,
             log_gradient_values=config.training.log_gradient_values,
+            num_epochs=config.training.num_epochs,
             use_wandb=use_wandb
         )
     logging.mlff('Training has finished!')
@@ -469,6 +492,105 @@ def run_evaluation(
 
     params = checkpoint_utils.load_params_from_checkpoint(ckpt_dir=ckpt_dir)
 
+    
+    # Print all parameter keys and shapes
+    def print_param_shapes(params, prefix=''):
+        if isinstance(params, dict):
+            for key, value in params.items():
+                if isinstance(value, (dict, jnp.ndarray)):
+                    if isinstance(value, jnp.ndarray):
+                        print(f"{prefix}{key}: {value.shape}")
+                    else:
+                        print(f"{prefix}{key}:")
+                        print_param_shapes(value, prefix + '  ')
+    
+    print("\nParameter shapes:")
+    # print("=" * 50)
+    # print_param_shapes(params)
+    # print("=" * 50)
+
+    # Modify parameters to handle theory levels
+    if 'params' in params and 'observables_0' in params['params']:
+        num_theory_levels = 16 
+        
+        # Modify energy_offset
+        if 'energy_offset' in params['params']['observables_0']:
+            # print("\nOriginal energy_offset:")
+            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            # print("Values:", params['params']['observables_0']['energy_offset'])
+            old_energy_offset = params['params']['observables_0']['energy_offset']
+            
+            # Only tile if shape is 1D
+            if len(old_energy_offset.shape) == 1:
+                new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+                params['params']['observables_0']['energy_offset'] = new_energy_offset
+            #     print("Applied tiling to energy_offset")
+            # else:
+            #     print("Energy offset already has multiple dimensions, no tiling applied")
+            
+            # print("\nNew energy_offset:")
+            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            # print("Values:", params['params']['observables_0']['energy_offset'])
+
+        # Modify atomic_scales
+        if 'atomic_scales' in params['params']['observables_0']:
+            # print("\nOriginal atomic_scales:")
+            # print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+            # print("Values:", params['params']['observables_0']['atomic_scales'])
+            old_atomic_scales = params['params']['observables_0']['atomic_scales']
+            
+            # Only tile if shape is 1D
+            if len(old_atomic_scales.shape) == 1:
+                new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+                params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+            #     print("Applied tiling to atomic_scales")
+            # else:
+            #     print("Atomic scales already has multiple dimensions, no tiling applied")
+            
+            # print("\nNew atomic_scales:")
+            # print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+            # print("Values:", params['params']['observables_0']['atomic_scales'])
+
+        # Modify energy_dense_final
+        if 'energy_dense_final' in params['params']['observables_0']:
+            # print("\nOriginal energy_dense_final kernel:")
+            # print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+            # print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+            old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+            
+            # Check the shape to determine if tiling is needed
+            if old_kernel.shape[1] == 1:
+                new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+                params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+            #     print("Applied tiling to energy_dense_final kernel")
+            # else:
+            #     print("Energy dense final kernel already has correct output dimension, no tiling applied")
+            
+            # print("\nNew energy_dense_final kernel:")
+            # print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+            # print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+
+    # print("\nParameter shapes after modification:")
+    print("=" * 50)
+    print_param_shapes(params)
+    print("=" * 50)
+
+    # Count total parameters
+    def count_params(params_dict):
+        total = 0
+        if isinstance(params_dict, dict):
+            for key, value in params_dict.items():
+                if isinstance(value, jnp.ndarray):
+                    total += value.size
+                elif isinstance(value, dict):
+                    total += count_params(value)
+                elif isinstance(value, np.ndarray):
+                    total += value.size
+        return total
+
+    total_params = count_params(params)
+    print(f"\nTotal number of parameters: {total_params:,}")
+
     logging.mlff(f'... done.')
 
     if model == 'so3krates':
@@ -517,6 +639,18 @@ def run_fine_tuning(
     config.neighborlist_format_lr = config_dict.placeholder(str)
     config.neighborlist_format_lr = 'sparse'
 
+    # Determine the workdir from which to load the model for fine-tuning.
+    start_from_workdir = Path(start_from_workdir).expanduser().resolve()
+    if not start_from_workdir.exists():
+        raise ValueError(
+            f'Trying to start fine tuning from {start_from_workdir} but directory does not exist.'
+        )
+    
+    # Load the config in the workdir to obtain the model hyperparameters and other important statistics.
+    hyperparams_path = start_from_workdir / 'hyperparameters.json'
+    with open(hyperparams_path, mode='r') as fp:
+        config_start_from_workdir = config_dict.ConfigDict(json.load(fp=fp))
+
     # Select a fine-tuning strategy.
     if strategy == 'full':
         # All parameters are re-fined.
@@ -524,18 +658,24 @@ def run_fine_tuning(
     elif strategy == 'final_mlp':
         # Only the final MLP is refined
         trainable_subset_keys = ['observables_0']
+    elif strategy == 'final_mlp_and_hirshfeld':
+        # Only the final MLP and the Hirshfeld are refined
+        trainable_subset_keys = ['observables_0', 'observables_2']
+    elif strategy == 'hirshfeld':
+        # Only the Hirshfeld is refined
+        trainable_subset_keys = ['observables_2']
     elif strategy == 'last_layer':
         # Only the last MP layer is refined.
-        trainable_subset_keys = [f'layers_{config.model.num_layers - 1}']
+        trainable_subset_keys = [f'layers_{config_start_from_workdir.model.num_layers - 1}']
     elif strategy == 'last_layer_and_final_mlp':
         # Only the last layer and the final MLP are refined.
-        trainable_subset_keys = [f'layers_{config.model.num_layers - 1}', 'observables_0']
+        trainable_subset_keys = [f'layers_{config_start_from_workdir.model.num_layers - 1}', 'observables_0']
     elif strategy == 'first_layer':
         # Only the first layer is refined.
         trainable_subset_keys = ['layers_0']
     elif strategy == 'first_layer_and_last_layer':
         # Only the first and layer MP layer are refined.
-        trainable_subset_keys = ['layers_0', f'layers_{config.model.num_layers - 1}']
+        trainable_subset_keys = ['layers_0', f'layers_{config_start_from_workdir.model.num_layers - 1}']
     else:
         raise ValueError(
             f'--strategy {strategy} is unknown. Select one of '
@@ -546,21 +686,36 @@ def run_fine_tuning(
             f'`first_layer`, '
             f'`first_layer_and_last_layer`)'
         )
+    
+    # Finalize the config for IO
+    # Unlock config.
+    # config = config.unlock()
+    # Set model config from the model config of the loaded workdir.
+    config.model = config_start_from_workdir.model
+    # For average number of neighbors message normalization, we have to overwrite the average
+    # number of neighbors in case a finetuned model will serve as starting point for another finetuning run.
+    # Otherwise the second finetuned model, will use the average number of neighbors from the first finetuning run, 
+    # not corresponding to the trained message normalization.
+    if config_start_from_workdir.model.message_normalization == 'avg_num_neighbors':
+        config.data.avg_num_neighbors = config_start_from_workdir.data.avg_num_neighbors
+    # Lock config.
+    # config = config.lock()
 
-    # Determine the workdir from which to load the model for fine-tuning.
-    start_from_workdir = Path(start_from_workdir).expanduser().resolve()
-    if not start_from_workdir.exists():
-        raise ValueError(
-            f'Trying to start fine tuning from {start_from_workdir} but directory does not exist.'
-        )
+    # # Determine the workdir from which to load the model for fine-tuning.
+    # start_from_workdir = Path(start_from_workdir).expanduser().resolve()
+    # if not start_from_workdir.exists():
+    #     raise ValueError(
+    #         f'Trying to start fine tuning from {start_from_workdir} but directory does not exist.'
+    #     )
 
     # Workdir for fine-tuning experiments.
     workdir = workdir_from_config(config=config)
-    if workdir.exists():
-        raise ValueError(
-            f'Please specify new workdir for fine tuning. Workdir {workdir} already exists.'
-        )
-    workdir.mkdir(exist_ok=False)
+
+    # if workdir.exists():
+    #     raise ValueError(
+    #         f'Please specify new workdir for fine tuning. Workdir {workdir} already exists.'
+    #     )
+    workdir.mkdir(exist_ok=True)
 
     # Update the workdir in config with absolute path.
     config.workdir = str(workdir)
@@ -577,6 +732,104 @@ def run_fine_tuning(
 
     # Load the parameters from the model for fine-tuning.
     params = checkpoint_utils.load_params_from_workdir(start_from_workdir)
+    
+    # Print all parameter keys and shapes
+    def print_param_shapes(params, prefix=''):
+        if isinstance(params, dict):
+            for key, value in params.items():
+                if isinstance(value, (dict, jnp.ndarray)):
+                    if isinstance(value, jnp.ndarray):
+                        print(f"{prefix}{key}: {value.shape}")
+                    else:
+                        print(f"{prefix}{key}:")
+                        print_param_shapes(value, prefix + '  ')
+    
+    # print("\nParameter shapes:")
+    # print("=" * 50)
+    # print_param_shapes(params)
+    # print("=" * 50)
+
+    # Modify parameters to handle theory levels
+    if 'params' in params and 'observables_0' in params['params']:
+        num_theory_levels = 16 
+
+        # Modify energy_offset
+        if 'energy_offset' in params['params']['observables_0']:
+            # print("\nOriginal energy_offset:")
+            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            # print("Values:", params['params']['observables_0']['energy_offset'])
+            old_energy_offset = params['params']['observables_0']['energy_offset']
+            
+            # Only tile if shape is 1D
+            if len(old_energy_offset.shape) == 1:
+                new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+                params['params']['observables_0']['energy_offset'] = new_energy_offset
+                # print("Applied tiling to energy_offset")
+            # else:
+            #     print("Energy offset already has multiple dimensions, no tiling applied")
+            
+            # print("\nNew energy_offset:")
+            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            # print("Values:", params['params']['observables_0']['energy_offset'])
+
+        # Modify atomic_scales
+        if 'atomic_scales' in params['params']['observables_0']:
+            # print("\nOriginal atomic_scales:")
+            # print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+            # print("Values:", params['params']['observables_0']['atomic_scales'])
+            old_atomic_scales = params['params']['observables_0']['atomic_scales']
+            
+            # Only tile if shape is 1D
+            if len(old_atomic_scales.shape) == 1:
+                new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+                params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+            #     print("Applied tiling to atomic_scales")
+            # else:
+            #     print("Atomic scales already has multiple dimensions, no tiling applied")
+            
+            # print("\nNew atomic_scales:")
+            # print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+            # print("Values:", params['params']['observables_0']['atomic_scales'])
+
+        # Modify energy_dense_final
+        if 'energy_dense_final' in params['params']['observables_0']:
+            # print("\nOriginal energy_dense_final kernel:")
+            # print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+            # print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+            old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+            
+            # Check the shape to determine if tiling is needed
+            if old_kernel.shape[1] == 1:
+                new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+                params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+            #     print("Applied tiling to energy_dense_final kernel")
+            # else:
+            #     print("Energy dense final kernel already has correct output dimension, no tiling applied")
+            
+            # print("\nNew energy_dense_final kernel:")
+            # print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+            # print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+
+    # print("\nParameter shapes after modification:")
+    print("=" * 50)
+    print_param_shapes(params)
+    print("=" * 50)
+
+    # Count total parameters
+    def count_params(params_dict):
+        total = 0
+        if isinstance(params_dict, dict):
+            for key, value in params_dict.items():
+                if isinstance(value, jnp.ndarray):
+                    total += value.size
+                elif isinstance(value, dict):
+                    total += count_params(value)
+                elif isinstance(value, np.ndarray):
+                    total += value.size
+        return total
+
+    total_params = count_params(params)
+    print(f"\nTotal number of parameters: {total_params:,}")
 
     # Get data filepath.
     data_filepath = data_path_from_config(config=config)
@@ -589,36 +842,37 @@ def run_fine_tuning(
     # Prepare training and validation data and load the data set statistics.
     training_data, validation_data, data_stats = prepare_training_and_validation_data(
         config=config,
+        model_config=None,
         loader=loader,
         tf_record_present=tf_record_present
     )
 
     # Check that message normalization has not change from original model to fine-tuning model.
-    hyperparams_path = start_from_workdir / 'hyperparameters.json'
-    with open(hyperparams_path, mode='r') as fp:
-        config_start_from_workdir = config_dict.ConfigDict(json.load(fp=fp))
+    # hyperparams_path = start_from_workdir / 'hyperparameters.json'
+    # with open(hyperparams_path, mode='r') as fp:
+    #     config_start_from_workdir = config_dict.ConfigDict(json.load(fp=fp))
 
-    if config_start_from_workdir.model.message_normalization != config.model.message_normalization:
-        raise ValueError(
-            f'Message normalization must be the same. '
-            f'Found {config_start_from_workdir.model.message_normalization} for the original config '
-            f'and {config.model.message_normalization} for the fine tuning config.'
-        )
+    # if config_start_from_workdir.model.message_normalization != config.model.message_normalization:
+    #     raise ValueError(
+    #         f'Message normalization must be the same. '
+    #         f'Found {config_start_from_workdir.model.message_normalization} for the original config '
+    #         f'and {config.model.message_normalization} for the fine tuning config.'
+    #     )
 
-    # If messages are normalized by the average number of neighbors, we need to load it from the old config file.
-    if config.model.message_normalization == 'avg_num_neighbors':
-        if config.data.avg_num_neighbors is not None:
-            logging.warning(
-                'Running fine tuning with config.model.message_normalization: avg_num_neighbors does not allow to '
-                'reset the avg_num_neighbors in the fine tuning config and must be set to null. It will be loaded from'
-                'the config in the workdir that is starting point for the fine tuning.'
-            )
+    # # If messages are normalized by the average number of neighbors, we need to load it from the old config file.
+    # if config.model.message_normalization == 'avg_num_neighbors':
+    #     if config.data.avg_num_neighbors is not None:
+    #         logging.warning(
+    #             'Running fine tuning with config.model.message_normalization: avg_num_neighbors does not allow to '
+    #             'reset the avg_num_neighbors in the fine tuning config and must be set to null. It will be loaded from'
+    #             'the config in the workdir that is starting point for the fine tuning.'
+    #         )
 
-        config.data.avg_num_neighbors = config_start_from_workdir.data.avg_num_neighbors
-        logging.mlff(
-            f'Read average number of neighbors = {config.data.avg_num_neighbors} from original config at'
-            f'{start_from_workdir}.'
-        )
+    #     config.data.avg_num_neighbors = config_start_from_workdir.data.avg_num_neighbors
+    #     logging.mlff(
+    #         f'Read average number of neighbors = {config.data.avg_num_neighbors} from original config at'
+    #         f'{start_from_workdir}.'
+    #     )
 
     opt = make_optimizer_from_config(config)
 
@@ -629,14 +883,10 @@ def run_fine_tuning(
             trainable_subset_keys=trainable_subset_keys
         )
 
-    # One could load the model from the original workdir itself, but this would mean to either have a specific
-    # fine_tuning_config or to silently ignore the model config in the config file. For now one has to make sure to
-    # define a suited model from config such that for now responsibility lies at the user. And code breaks if it is
-    # not done properly so is directly visible by user.
     if model == 'so3krates':
-        net = make_so3krates_sparse_from_config(config)
+        net = make_so3krates_sparse_from_config(config_start_from_workdir)
     elif model == 'itp_net':
-        net = make_itp_net_from_config(config)
+        net = make_itp_net_from_config(config_start_from_workdir)
     else:
         raise ValueError(
             f'{model=} is not a valid model.'
@@ -644,7 +894,16 @@ def run_fine_tuning(
 
     loss_fn = training_utils.make_loss_fn(
         get_energy_and_force_fn_sparse(net),
-        weights=config.training.loss_weights
+        weights=config.training.loss_weights,
+        use_robust_loss=config.training.get('use_robust_loss', False),
+        robust_loss_alpha=config.training.get('robust_loss_alpha', 1.99),
+    )
+
+    val_fn = training_utils.make_val_fn(
+        get_energy_and_force_fn_sparse(net),
+        weights=config.training.loss_weights,
+        use_robust_loss=config.training.get('use_robust_loss_validation', False),
+        robust_loss_alpha=config.training.get('robust_loss_alpha_validation', 1.99)
     )
 
     if config.training.batch_max_num_nodes is None:
@@ -695,7 +954,7 @@ def run_fine_tuning(
     #     config.training.batch_max_num_nodes = batch_max_num_nodes
     #     config.training.batch_max_num_edges = batch_max_num_edges
     #     config.training.batch_max_num_pairs = batch_max_num_pairs
-
+    
     with open(workdir / 'hyperparameters.json', 'w') as fp:
         json.dump(config.to_dict(), fp)
 
@@ -711,11 +970,19 @@ def run_fine_tuning(
     logging.mlff(
         f'Fine tuning model from {start_from_workdir} on {data_filepath}!'
     )
+
+    ckpt_dir = workdir / 'checkpoints'
+    if Path(ckpt_dir).exists():
+        raise ValueError(
+            f"Checkpoint directory {ckpt_dir} already exists."
+        )
+
     if tf_record_present is True:
         training_utils.fit_from_iterator(
             model=net,
             optimizer=opt,
             loss_fn=loss_fn,
+            val_fn=val_fn,
             graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
             batch_max_num_edges=config.training.batch_max_num_edges,
             batch_max_num_nodes=config.training.batch_max_num_nodes,
@@ -724,12 +991,13 @@ def run_fine_tuning(
             training_iterator=training_data,
             validation_iterator=validation_data,
             params=params,
-            ckpt_dir=workdir / 'checkpoints',
+            ckpt_dir=ckpt_dir,
             eval_every_num_steps=config.training.eval_every_num_steps,
             allow_restart=config.training.allow_restart,
             training_seed=config.training.training_seed,
             model_seed=config.training.model_seed,
             log_gradient_values=config.training.log_gradient_values,
+            num_epochs=config.training.num_epochs,
             use_wandb=use_wandb
         )
     else:
@@ -737,6 +1005,7 @@ def run_fine_tuning(
             model=net,
             optimizer=opt,
             loss_fn=loss_fn,
+            val_fn=val_fn,
             graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
             batch_max_num_edges=config.training.batch_max_num_edges,
             batch_max_num_nodes=config.training.batch_max_num_nodes,
@@ -745,7 +1014,7 @@ def run_fine_tuning(
             training_data=training_data,
             validation_data=validation_data,
             params=params,
-            ckpt_dir=workdir / 'checkpoints',
+            ckpt_dir=ckpt_dir,
             eval_every_num_steps=config.training.eval_every_num_steps,
             allow_restart=config.training.allow_restart,
             num_epochs=config.training.num_epochs,
@@ -758,69 +1027,113 @@ def run_fine_tuning(
 
 
 def data_loader_from_config(config):
-
+    """Create a data loader from config.
+    
+    Args:
+        config: Configuration object
+        
+    Returns:
+        DataLoader instance and tf_record_present flag
+    """
+    # Initialize variables
+    loader = None
     tf_record_present = False
 
-    data_filepath = data_path_from_config(config=config)
+    # Get dataset paths and weights from config
+    if hasattr(config.data, 'datasets'):
+        # Multiple datasets case
+        dataset_paths = [Path(d['path']).expanduser().resolve() for d in config.data.datasets]
+        dataset_weights = [d.get('weight', 1.0) for d in config.data.datasets]
+        tf_record_present = all(len([1 for x in os.scandir(p) if Path(x).suffix[:9] == '.tfrecord']) > 0 for p in dataset_paths)
+    else:
+        # Single dataset case (original functionality)
+        data_filepath = data_path_from_config(config=config)
+        #dataset_paths = data_path_from_config(config=config)
+#        dataset_weights = [1.0]
+#        tf_record_present = len([1 for x in os.scandir(dataset_paths[0]) if Path(x).suffix[:9] == '.tfrecord']) > 0
+
     energy_unit = energy_unit_from_config(config=config)
     length_unit = length_unit_from_config(config=config)
-    if data_filepath.is_file():
-        if data_filepath.suffix == '.npz':
-            loader = data.NpzDataLoaderSparse(input_file=data_filepath)
-        elif data_filepath.stem[:5].lower() == 'spice':
-            logging.mlff(f'Found SPICE dataset at {data_filepath}.')
-            if data_filepath.suffix != '.hdf5':
-                raise ValueError(
-                    f'Loader assumes that SPICE is in hdf5 format. Found {data_filepath.suffix} as'
-                    f'suffix.')
-            loader = data.SpiceDataLoaderSparse(input_file=data_filepath)
-        else:
-            loader = data.AseDataLoaderSparse(input_file=data_filepath)
 
-    elif data_filepath.is_dir():
-        tf_record_present = len([1 for x in os.scandir(data_filepath) if Path(x).suffix[:9] == '.tfrecord']) > 0
-        npz_record_present = len([1 for x in os.scandir(data_filepath) if Path(x).suffix == '.npz']) > 0
-
-        if tf_record_present:
-            max_force = config.data.filter.max_force
-            loader = data.QCMLDataLoaderSparse(
-                input_folder=data_filepath,
-                split='train',
-                max_force_filter=max_force / energy_unit * length_unit if max_force is not None else None
-            )
-        elif npz_record_present:
-            loader = data.NpzDataLoaderSparse(
-                input_folder=data_filepath
-            )
+    if tf_record_present:
+        loader = data.QCMLDataLoaderSparseParallel(
+            config=config,
+            input_folders=dataset_paths,
+            dataset_weights=dataset_weights,
+            length_unit=length_unit,
+            energy_unit=energy_unit
+        )
+    else:
+        # Handle non-TFDS datasets
+#        if len(dataset_paths) > 1:
+#            raise ValueError("Multiple datasets are only supported with TFDS format")
+        
+#        data_filepath = dataset_paths[0]
+        if data_filepath.is_file():
+            if data_filepath.suffix == '.npz':
+                loader = data.NpzDataLoaderSparse(input_file=data_filepath)
+            elif data_filepath.stem[:5].lower() == 'spice':
+                logging.mlff(f'Found SPICE dataset at {data_filepath}.')
+                if data_filepath.suffix != '.hdf5':
+                    raise ValueError(
+                        f'Loader assumes that SPICE is in hdf5 format. Found {data_filepath.suffix} as'
+                        f'suffix.')
+                loader = data.SpiceDataLoaderSparse(input_file=data_filepath)
+            else:
+                loader = data.AseDataLoaderSparse(input_file=data_filepath)
+        elif data_filepath.is_dir():
+            npz_record_present = len([1 for x in os.scandir(data_filepath) if Path(x).suffix == '.npz']) > 0
+            if npz_record_present:
+                loader = data.NpzDataLoaderSparse(input_folder=data_filepath)
+            else:
+                loader = data.AseDataLoaderSparse(input_folder=data_filepath)
         else:
-            loader = data.AseDataLoaderSparse(
-                input_folder=data_filepath
-            )
+            raise ValueError(f"Data path {data_filepath} does not exist or is not accessible")
+
+    if loader is None:
+        raise ValueError(f"Could not initialize data loader for paths {dataset_paths}")
 
     return loader, tf_record_present
 
 
-def prepare_training_and_validation_data(config, loader, tf_record_present):
+def prepare_training_and_validation_data(config, loader, tf_record_present, model_config: Optional = None):
     # Lock the config.
     config = config.lock()
+    # If model config is not None, lock it. Otherwise, use model config from the config. 
+    # This handles the case where config and model config can be different, i.e. during finetuning or transfer learning.
+    if model_config is not None:
+        model_config = model_config.lock()
+    else:
+        model_config = config.model
 
     workdir = workdir_from_config(config=config)
-    data_filepath = data_path_from_config(config=config)
+    data_filepaths = data_path_from_config(config=config)
 
     # Extract the units from config.
     energy_unit = energy_unit_from_config(config=config)
     length_unit = length_unit_from_config(config=config)
     dipole_vec_unit = dipole_vec_unit_from_config(config=config)
 
-    # Get the total number of data points.
-    num_data = loader.cardinality()
+    # Get dataset weights if specified
+    if hasattr(config.data, 'datasets'):
+        dataset_weights = [d.get('weight', 1.0) for d in config.data.datasets]
+    else:
+        dataset_weights = [1.0]  # Default weight for single dataset
+
     num_train = config.training.num_train
     num_valid = config.training.num_valid
+
+    # Get the total number of data points.
+    if not tf_record_present:
+        num_data = loader.cardinality()
+    else:
+        num_data = loader.cardinality()
+        print(f"Number of points in train tfds split: {num_data}")
 
     if num_train + num_valid > num_data:
         raise ValueError(
             f"num_train + num_valid = {num_train + num_valid} exceeds the number of data points {num_data}"
-            f" in {data_filepath}."
+            f" in {data_filepaths}."
         )
     if not tf_record_present:
         split_seed = config.data.split_seed
@@ -836,7 +1149,7 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
 
         # Cutoff is in Angstrom, so we have to divide the cutoff by the length unit.
         training_and_validation_data, data_stats = loader.load(
-            cutoff=config.model.cutoff / length_unit,
+            cutoff=model_config.cutoff / length_unit,
             cutoff_lr=config.data.neighbors_lr_cutoff / length_unit if config.data.neighbors_lr_bool is True else None,
             calculate_neighbors_lr=config.data.neighbors_lr_bool,
             pick_idx=training_and_validation_indices
@@ -873,13 +1186,35 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
             )
             json.dump(j, fp)
     else:
-        training_data, validation_data = loader.load(
-            cutoff=config.model.cutoff / length_unit,
-            calculate_neighbors_lr=config.data.neighbors_lr_bool,
-            cutoff_lr=config.data.neighbors_lr_cutoff / length_unit if config.data.neighbors_lr_bool is True else None,
-            num_train=num_train,
-            num_valid=num_valid
-        )
+        # For parallel data loading, we need to ensure batch parameters are set
+        if config.training.batch_max_num_nodes is None or config.training.batch_max_num_edges is None:
+            raise ValueError(
+                'When using QCMLDataLoaderSparseParallel, `batch_max_num_nodes` and `batch_max_num_edges` must be '
+                'specified in the config file via training.batch_max_num_nodes and training.batch_max_num_edges.'
+            )
+            
+        # Check batch_max_num_pairs if neighbors_lr_bool is True
+        if config.data.neighbors_lr_bool is True and config.training.batch_max_num_pairs is None:
+            raise ValueError(
+                'When using QCMLDataLoaderSparseParallel with neighbors_lr_bool=True, `batch_max_num_pairs` must be '
+                'specified in the config file via training.batch_max_num_pairs.'
+            )
+        
+        # Create the parallel loader with the full config
+        # parallel_loader = data.QCMLDataLoaderSparseParallel(
+        #     config=config,
+        #     input_folders=data_filepaths,
+        #     dataset_weights=dataset_weights,
+        #     length_unit=length_unit,
+        #     energy_unit=energy_unit
+        # )
+        
+        # # Get data for training and validation
+        # training_data = parallel_loader
+        # validation_data = parallel_loader
+        training_data = loader
+        validation_data = loader
+
         data_stats = None
         # Save the splits.
         with open(workdir / 'data_splits.json', 'w') as fp:
@@ -931,30 +1266,8 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
             raise NotImplementedError(
                 'For TFDSDataSets, energy shifting is not supported yet.'
             )
-
-        # Convert the units.
-        training_data = training_data.map(
-            lambda graph: data.transformations.unit_conversion_graph(
-                graph,
-                energy_unit=energy_unit,
-                length_unit=length_unit,
-                dipole_vec_unit=dipole_vec_unit
-            )
-        )
-        validation_data = validation_data.map(
-            lambda graph: data.transformations.unit_conversion_graph(
-                graph,
-                energy_unit=energy_unit,
-                length_unit=length_unit,
-                dipole_vec_unit=dipole_vec_unit
-            )
-        )
-
-        training_data = training_data.shuffle(
-            buffer_size=10_000,
-            reshuffle_each_iteration=True,
-            seed=config.training.training_seed
-        ).repeat(config.training.num_epochs)
+        # TODO: Handle unit conversion inside the dataloader
+            
 
     return training_data, validation_data, data_stats
 
@@ -966,9 +1279,23 @@ def workdir_from_config(config):
 
 
 def data_path_from_config(config):
-    data_path = config.data.filepath
-    data_path = Path(data_path).expanduser().resolve()
-    return data_path
+    """Get the data path from the config.
+    
+    Args:
+        config: The configuration object.
+        
+    Returns:
+        List of paths to the input data folders.
+    """
+    if hasattr(config.data, 'datasets'):
+        # Handle multiple datasets
+        data_paths = [d['path'] for d in config.data.datasets]
+        return data_paths
+    else:
+        # Handle single dataset (backward compatibility)
+        data_path = config.data.filepath
+        data_path = Path(data_path).expanduser().resolve()
+        return data_path  # Return as list for consistency
 
 
 def dipole_vec_unit_from_config(config):

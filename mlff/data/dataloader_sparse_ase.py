@@ -36,6 +36,19 @@ def compute_senders_and_receivers_np(
     return senders, receivers, distances_min
 
 
+# Calculate residue information for dimer calculations
+def parse_selection_range(selection_str):
+    """Parse selection string like '1-4' into number of atoms."""
+    if not selection_str or selection_str == "":
+        return 0
+    if '-' in selection_str:
+        start, end = selection_str.split('-')
+        return int(end) - int(start) + 1
+    else:
+        # Single atom selection
+        return 1
+    
+
 @dataclass
 class AseDataLoaderSparse:
     input_file: Optional[str] = None
@@ -164,7 +177,7 @@ def ASE_to_jraph(
 
     num_atoms = len(atomic_numbers)
 
-    if mol.get_calculator() is not None:
+    if mol.calc is not None:
         try:
             energy = np.array(mol.get_potential_energy()).reshape(-1)
         except PropertyNotImplementedError:
@@ -194,8 +207,11 @@ def ASE_to_jraph(
 
     # Energy is NaN when not present.
     if energy is None:
-        # Energy from ASE is only a scalar.
-        energy = np.nan
+        energy = np.array([np.nan])
+
+    max_num_theory_levels = 16
+    theory_level = np.reshape(1, (1,))
+    theory_mask = np.eye(max_num_theory_levels)[theory_level] # (1, num_theory_levels)
 
     # Dipoles are NaN when not present.
     if dipole is None:
@@ -230,6 +246,28 @@ def ASE_to_jraph(
         hirshfeld_ratios[:] = np.nan
     else:
         hirshfeld_ratios = np.array(hirshfeld_ratios).reshape(num_atoms, )
+    
+    # Initialize monomer-specific information for dimer binding energy calculations,
+    # as described in the Methods section of SO3LR paper.
+    residue_charge = None
+    residue_segments = None
+    # Read dimer-specific properties for dimer calculations
+    structure_type = mol.info.get('structure_type', None)
+    if structure_type == 'dimer_translated':
+        charge_a = mol.info.get('charge_a', None)
+        charge_b = mol.info.get('charge_b', None)
+        selection_a = mol.info.get('selection_a', None)
+        selection_b = mol.info.get('selection_b', None)
+    
+	    # Only create residue info if all dimer properties are present
+        if all(x is not None for x in [charge_a, charge_b, selection_a, selection_b]):
+            # Parse monomer sizes
+            n_monomer_a = parse_selection_range(selection_a)
+            n_monomer_b = parse_selection_range(selection_b)
+            # Validate that selections cover all atoms
+            if n_monomer_a > 0 and n_monomer_b > 0 and (n_monomer_a + n_monomer_b) == num_atoms:
+                residue_charge = np.array([int(charge_a), int(charge_b)])
+                residue_segments = np.concatenate([np.repeat(0, n_monomer_a), np.repeat(1, n_monomer_b)])
 
     if mol.get_pbc().any():
         i, j, S = neighbor_list('ijS', mol, cutoff, self_interaction=self_interaction)
@@ -248,10 +286,6 @@ def ASE_to_jraph(
         receivers = np.array(i)
 
     if calculate_neighbors_lr:
-        if mol.get_pbc().any():
-            raise NotImplementedError(
-                'Long-range neighborhoods can only be calculated for non-PBC at the moment.'
-            )
         if cutoff_lr is None:
             raise ValueError(
                 f'cutoff_lr must be specified for {calculate_neighbors_lr=}. Received {cutoff_lr=}.'
@@ -278,11 +312,19 @@ def ASE_to_jraph(
     # as (num_graphs, ).
     global_context = {
         "energy": energy.reshape(-1),
+        "theory_level": theory_level.reshape(-1),
+        "theory_mask": theory_mask, #.reshape(1, max_num_theory_levels),
         "stress": stress.reshape(1, 6),
         "dipole_vec": dipole.reshape(1, 3),
         "total_charge": total_charge.reshape(-1),
         "num_unpaired_electrons": multiplicity.reshape(-1) - 1,
     }
+
+    if residue_charge is not None:
+        global_context.update({
+            "residue_charge": residue_charge,
+            "residue_segments": residue_segments,
+        })
 
     # Edges follow a similar convention where e.g. for positions and forces one has (num_nodes, 3) and for scalars
     # like hirshfeld volumes (num_nodes, ).

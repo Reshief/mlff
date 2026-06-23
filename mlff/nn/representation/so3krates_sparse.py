@@ -4,6 +4,7 @@ from mlff.nn.embed import GeometryEmbedSparse
 from mlff.nn.layer import SO3kratesLayerSparse
 from mlff.nn.observable import EnergySparse
 from mlff.nn.observable import ElectrostaticEnergySparse
+from mlff.nn.observable import ElectrostaticEnergyKspace
 from mlff.nn.observable import DispersionEnergySparse
 from mlff.nn.observable import ZBLRepulsionSparse
 from mlff.nn.observable import DipoleVecSparse
@@ -44,10 +45,13 @@ def init_so3krates_sparse(
         energy_learn_atomic_type_shifts: bool = False,
         electrostatic_energy_bool: bool = False,
         electrostatic_energy_scale: float = 1.0,
+        electrostatic_energy_kspace_do_ewald_bool: bool = False,
+        electrostatic_energy_kspace_interp_nodes: int = 4,
         dispersion_energy_bool: bool = False,
         dispersion_energy_cutoff_lr_damping: Optional[float] = None,
         dispersion_energy_scale: float = 1.0,
         zbl_repulsion_bool: bool = False,
+        use_final_bias_bool: bool = True,
         return_representations_bool: bool = False,
         input_convention: str = 'positions',
         neighborlist_format_lr: str = 'sparse',  # or 'ordered_sparse'
@@ -112,6 +116,14 @@ def init_so3krates_sparse(
         neighborlist_format=neighborlist_format_lr
     )
 
+    electrostatic_energy_kspace = ElectrostaticEnergyKspace(
+        prop_keys=None,
+        partial_charges=partial_charges,
+        do_ewald=electrostatic_energy_kspace_do_ewald_bool,
+        electrostatic_energy_scale=electrostatic_energy_scale,
+        interpolation_nodes=electrostatic_energy_kspace_interp_nodes
+    )
+
     electrostatic_energy = ElectrostaticEnergySparse(
         prop_keys=None,
         partial_charges=partial_charges,
@@ -139,6 +151,7 @@ def init_so3krates_sparse(
         learn_atomic_type_scales=energy_learn_atomic_type_scales,
         learn_atomic_type_shifts=energy_learn_atomic_type_shifts,
         electrostatic_energy=electrostatic_energy,
+        electrostatic_energy_kspace=electrostatic_energy_kspace,
         dispersion_energy=dispersion_energy,
         partial_charges=partial_charges,
         hirshfeld_ratios=hirshfeld_ratios,
@@ -147,6 +160,7 @@ def init_so3krates_sparse(
         dispersion_energy_bool=dispersion_energy_bool,
         zbl_repulsion_bool=zbl_repulsion_bool,
         output_intermediate_quantities=output_intermediate_quantities,
+        use_final_bias_bool=use_final_bias_bool
     )
 
     return StackNetSparse(

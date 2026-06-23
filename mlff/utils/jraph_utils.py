@@ -32,7 +32,7 @@ def batch_info_fn(batched_graph: jraph.GraphsTuple):
         node_mask=node_mask,
         graph_mask=graph_mask,
         batch_segments=batch_segments,
-        num_of_non_padded_graphs=num_of_non_padded_graphs
+        num_of_non_padded_graphs=num_of_non_padded_graphs,
     )
 
 
@@ -54,6 +54,10 @@ def graph_to_batch_fn(graph: jraph.GraphsTuple):
         hirshfeld_ratios=graph.nodes.get('hirshfeld_ratios'),
         idx_i_lr=graph.idx_i_lr,
         idx_j_lr=graph.idx_j_lr,
+        theory_level=graph.globals.get('theory_level'),
+        theory_mask=graph.globals.get('theory_mask'),
+        residue_charge=graph.globals.get('residue_charge'),
+        residue_segments=graph.globals.get('residue_segments'),
     )
     batch_info = batch_info_fn(graph)
     batch.update(batch_info)

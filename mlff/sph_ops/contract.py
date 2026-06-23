@@ -14,7 +14,9 @@ from typing import (Callable, Sequence)
 
 indx_fn = lambda x: int((x+1)**2) if x >= 0 else 0
 
-
+# def load_cgmatrix():
+#     stream = pkg_resources.resource_stream(__name__, 'cgmatrix.npz')
+#     return np.load(stream)['cg']
 def load_cgmatrix():
     ref = importlib_resources.files(__name__).joinpath('cgmatrix.npz')
     # with ref.open('rb') as fp:

@@ -15,6 +15,10 @@ from typing import Any, Callable, Dict, Sequence
 from ..utils import gradient_utils
 from ..utils import checkpoint_utils
 
+from .robust_loss_jax import distribution as robust_loss_dist
+
+# Initialize the distribution object for adaptive robust loss
+ROBUST_LOSS_DIST = robust_loss_dist.Distribution()
 
 def print_metrics(epoch, eval_metrics):
     formatted_output = f"{epoch}: "
@@ -26,7 +30,7 @@ def print_metrics(epoch, eval_metrics):
     return formatted_output.rstrip(", ")
 
 
-def graph_mse_loss(y, y_label, batch_segments, graph_mask, scale):
+def graph_mse_loss(y, y_label, batch_segments, graph_mask, scale, use_robust_loss=False, robust_loss_alpha=1.99):
     del batch_segments
 
     assert y.shape == y_label.shape
@@ -37,32 +41,80 @@ def graph_mse_loss(y, y_label, batch_segments, graph_mask, scale):
         graph_mask, [y_label.ndim - 1 - o for o in range(0, y_label.ndim - 1)]
     )
     denominator = full_mask.sum().astype(y.dtype)
-    mse = (
-            jnp.sum(
-                2 * scale * optax.l2_loss(
-                    jnp.where(full_mask, y, 0).reshape(-1),
-                    jnp.where(full_mask, y_label, 0).reshape(-1),
+
+    # jax.debug.print("y_label_graph: {}", y_label)
+    # jax.debug.print("y_graph: {}", y)
+    
+    if use_robust_loss:
+        # Adaptive robust loss
+        diff = jnp.where(full_mask, y - y_label, 0).reshape(-1)
+
+        # # Compute adaptive scale
+        # mean_abs_diff = jnp.sum(jnp.abs(diff)) / jnp.maximum(denominator, 1)
+        # robust_scale = jnp.maximum(mean_abs_diff * 10, 1e-6)
+        # jax.debug.print("robust_scale_graph: {}", robust_scale)
+        # jax.debug.print("mean_abs_diff_graph: {}", mean_abs_diff)
+
+        # loss = jnp.sum(2 * scale * ROBUST_LOSS_DIST.nllfun(diff, robust_loss_alpha, robust_scale)) / denominator
+        # Compute adaptive scale, use scale of 1.0
+        loss = jnp.sum(2 * scale * ROBUST_LOSS_DIST.nllfun(diff, robust_loss_alpha, 1.0)) / denominator
+
+    else:
+        # Regular L2 loss
+        loss = (
+                jnp.sum(
+                    2 * scale * optax.l2_loss(
+                        jnp.where(full_mask, y, 0).reshape(-1),
+                        jnp.where(full_mask, y_label, 0).reshape(-1),
+                    )
                 )
-            )
-            / denominator
-    )
-    return mse
+                / denominator
+        )
+    return loss
 
 
-def node_mse_loss(y, y_label, batch_segments, graph_mask, scale):
-
+def node_mse_loss(y, y_label, batch_segments, graph_mask, scale, use_robust_loss=False, robust_loss_alpha=1.99):
     assert y.shape == y_label.shape
+
+    # jax.debug.print("y_label_node: {}", y_label)
+    # jax.debug.print("y_node: {}", y)
 
     num_graphs = graph_mask.sum().astype(y.dtype)  # ()
 
-    squared = gradient_utils.safe_mask(
-        fn=lambda u: jnp.square(u),
-        operand=y - y_label,
-        mask=~jnp.isnan(y_label),
-        placeholder=0.
-    )
+    if use_robust_loss:
+        # Adaptive robust loss
+        diff = y - y_label
+        masked_diff = gradient_utils.safe_mask(
+            fn=lambda u: u,
+            operand=diff,
+            mask=~jnp.isnan(y_label),
+            placeholder=0.
+        )
+        
+        # # Compute adaptive scale
+        # valid_count = (~jnp.isnan(y_label)).sum()
+        # mean_abs_diff = jnp.sum(jnp.abs(masked_diff)) / jnp.maximum(valid_count, 1)
+        # robust_scale = jnp.maximum(mean_abs_diff * 10, 1e-6)
+        # jax.debug.print("robust_scale_node: {}", robust_scale)
+        # jax.debug.print("mean_abs_diff_node: {}", mean_abs_diff)
+        
+        squared = gradient_utils.safe_mask(
+            # fn=lambda u: 2 * ROBUST_LOSS_DIST.nllfun(u, robust_loss_alpha, robust_scale),
+            fn=lambda u: 2 * ROBUST_LOSS_DIST.nllfun(u, robust_loss_alpha, 1.0),
+            operand=masked_diff,
+            mask=~jnp.isnan(y_label),
+            placeholder=0.
+        )
+    else:
+        # Regular L2 loss
+        squared = gradient_utils.safe_mask(
+            fn=lambda u: jnp.square(u),
+            operand=y - y_label,
+            mask=~jnp.isnan(y_label),
+            placeholder=0.
+        )
 
-    # sum up the l2_losses for node properties along the non-leading dimension. For e.g. scalar node quantities
+    # sum up the losses for node properties along the non-leading dimension. For e.g. scalar node quantities
     # this does not have any effect, but e.g. for vectorial and tensorial node properties one averages over all
     # additional non-leading dimension. E.g. for forces this corresponds to taking mean over x, y, z component.
     node_mean_squared = squared.reshape(len(squared), -1).mean(axis=-1)  # (num_nodes)
@@ -113,6 +165,97 @@ def node_mse_loss(y, y_label, batch_segments, graph_mask, scale):
     return mse
 
 
+def graph_mae_loss(y, y_label, batch_segments, graph_mask, scale):
+    assert y.shape == y_label.shape
+
+    full_mask = ~jnp.isnan(
+        y_label
+    ) & jnp.expand_dims(
+        graph_mask, [y_label.ndim - 1 - o for o in range(0, y_label.ndim - 1)]
+    )
+    denominator = full_mask.sum().astype(y.dtype)
+    
+    # Calculate absolute error instead of squared error
+    loss = (
+            jnp.sum(
+                jnp.abs(
+                    jnp.where(full_mask, y, 0).reshape(-1) - 
+                    jnp.where(full_mask, y_label, 0).reshape(-1)
+                )
+            ) 
+            / denominator
+    )
+    return loss
+
+
+def node_mae_loss(y, y_label, batch_segments, graph_mask, scale):
+    assert y.shape == y_label.shape
+
+    num_graphs = graph_mask.sum().astype(y.dtype)  # ()
+
+    # Use absolute error for MAE
+    abs_error = gradient_utils.safe_mask(
+        fn=lambda u: jnp.abs(u),
+        operand=y - y_label,
+        mask=~jnp.isnan(y_label),
+        placeholder=0.
+    )
+
+    # sum up the losses for node properties along the non-leading dimension
+    node_mean_abs = abs_error.reshape(len(abs_error), -1).mean(axis=-1)  # (num_nodes)
+
+    per_graph_mae = jraph.segment_mean(
+        data=node_mean_abs,
+        segment_ids=batch_segments,
+        num_segments=len(graph_mask)
+    )  # (num_graphs)
+
+    # Set contributions from padding graphs to zero.
+    per_graph_mae = jnp.where(
+        graph_mask,
+        per_graph_mae,
+        jnp.asarray(0., dtype=per_graph_mae.dtype)
+    )  # (num_graphs)
+
+    # Create mask that has True when data is present and is false if no data is present
+    data_msk = ~jnp.isnan(
+        jax.ops.segment_max(
+            data=jnp.max(y_label.reshape(len(y_label), -1), axis=-1),
+            segment_ids=batch_segments,
+            num_segments=len(graph_mask)
+        )  # evaluates to NaN if one entry in the segment is NaN.
+    )  # (num_graphs)
+
+    # Set contributions from graphs for which no node labels are present to zero.
+    per_graph_mae = jnp.where(
+        data_msk,
+        per_graph_mae,
+        jnp.asarray(0., dtype=per_graph_mae.dtype)
+    )  # (num_graphs)
+
+    # Calculate the number of graphs that have no data present.
+    num_graphs_no_data = jnp.where(
+        data_msk,
+        jnp.asarray(0., dtype=per_graph_mae.dtype),
+        jnp.asarray(1., dtype=per_graph_mae.dtype),
+    ).sum()
+
+    # subtract the number of graphs for which no data is present.
+    num_graphs = num_graphs - num_graphs_no_data
+
+    # Calculate mean. Prevent division by zero if no data is present.
+    mae = jnp.sum(per_graph_mae) / jnp.maximum(num_graphs, 1.)
+    
+    return mae
+
+property_to_mae = {
+    'energy': graph_mae_loss,
+    'stress': graph_mae_loss,
+    'forces': node_mae_loss,
+    'dipole_vec': graph_mae_loss,
+    'hirshfeld_ratios': node_mae_loss,
+}
+
 property_to_loss = {
     'energy': graph_mse_loss,
     'stress': graph_mse_loss,
@@ -122,7 +265,8 @@ property_to_loss = {
 }
 
 
-def make_loss_fn(obs_fn: Callable, weights: Dict, scales: Dict = None):
+def make_loss_fn(obs_fn: Callable, weights: Dict, scales: Dict = None, 
+                 use_robust_loss: bool = False, robust_loss_alpha: float = 1.99):
     # Targets are collected based on the loss weights.
     targets = list(weights.keys())
 
@@ -142,9 +286,25 @@ def make_loss_fn(obs_fn: Callable, weights: Dict, scales: Dict = None):
         # Make predictions.
         outputs_predict = obs_fn(params, **inputs)
         loss = jnp.zeros(1)
+        loss_mae = jnp.zeros(1)
         metrics = {}
         # Iterate over the targets, calculate loss and multiply with loss weights and scales.
         for target in targets:
+
+            target_mae_fn = property_to_mae[target]
+            _mae = target_mae_fn(
+                y=outputs_predict[target],
+                y_label=outputs_true[target],
+                scale=_scales[target],
+                batch_segments=inputs['batch_segments'],
+                graph_mask=inputs['graph_mask']
+            )
+
+            # metrics.update({f'{target}_mae': _mae})
+            metrics.update({f'{target}_mae': _mae / _scales[target].mean()})
+
+            loss_mae += weights[target] * _mae
+
             target_loss_fn = property_to_loss[target]
             _l = target_loss_fn(
                 y=outputs_predict[target],
@@ -152,17 +312,97 @@ def make_loss_fn(obs_fn: Callable, weights: Dict, scales: Dict = None):
                 scale=_scales[target],
                 batch_segments=inputs['batch_segments'],
                 graph_mask=inputs['graph_mask'],
+                use_robust_loss=use_robust_loss,
+                robust_loss_alpha=robust_loss_alpha
             )
 
             loss += weights[target] * _l
             metrics.update({f'{target}_mse': _l / _scales[target].mean()})
 
         loss = jnp.reshape(loss, ())
+        loss_mae = jnp.reshape(loss_mae, ())
         metrics.update({'loss': loss})
+        metrics.update({'loss_mae': loss_mae})
 
         return loss, metrics
 
     return loss_fn
+
+
+def make_val_fn(obs_fn: Callable, weights: Dict, scales: Dict = None, 
+                use_robust_loss: bool = False, robust_loss_alpha: float = 1.99):
+    """Creates a validation function that calculates MAE metrics
+    
+    Args:
+        obs_fn (Callable): Observable function that returns predicted properties
+        weights (Dict): Dictionary of property names and their weights
+        scales (Dict, optional): Dictionary of scales for each property. Defaults to None.
+        use_robust_loss (bool, optional): Whether to use robust loss for MSE calculation. Defaults to False.
+        robust_loss_alpha (float, optional): Alpha parameter for robust loss. Defaults to 1.99.
+    
+    Returns:
+        Callable: Validation function that returns MAE metrics
+    """
+    # Targets are collected based on the loss weights
+    targets = list(weights.keys())
+
+    if scales is None:
+        _scales = {k: jnp.ones(1) for k in targets}
+    else:
+        _scales = scales
+
+    @jax.jit
+    def val_fn(params, batch: Dict[str, jnp.ndarray]):
+        # Everything that is not a target is a input
+        inputs = {k: v for k, v in batch.items() if k not in targets}
+
+        # Collect the targets
+        outputs_true = {k: v for k, v in batch.items() if k in targets}
+
+        # Make predictions
+        outputs_predict = obs_fn(params, **inputs)
+        metrics = {}
+        
+        # Iterate over the targets and calculate MAE metrics
+        for target in targets:
+            target_mae_fn = property_to_mae[target]
+            _mae = target_mae_fn(
+                y=outputs_predict[target],
+                y_label=outputs_true[target],
+                scale=_scales[target],
+                batch_segments=inputs['batch_segments'],
+                graph_mask=inputs['graph_mask']
+            )
+
+            # metrics.update({f'{target}_mae': _mae})
+            metrics.update({f'{target}_mae': _mae / _scales[target].mean()})
+
+            # Calculate MSE metrics
+            target_loss_fn = property_to_loss[target]
+            _mse = target_loss_fn(
+                y=outputs_predict[target],
+                y_label=outputs_true[target],
+                scale=_scales[target],
+                batch_segments=inputs['batch_segments'],
+                graph_mask=inputs['graph_mask'],
+                use_robust_loss=use_robust_loss,
+                robust_loss_alpha=robust_loss_alpha
+            )
+            metrics.update({f'{target}_mse': _mse / _scales[target].mean()})
+
+        # Calculate total loss using MSE for compatibility with existing code
+        loss = jnp.zeros(1)
+        loss_mae = jnp.zeros(1)
+        for target in targets:
+            loss += weights[target] * metrics[f'{target}_mse'] * _scales[target].mean()
+            loss_mae += weights[target] * metrics[f'{target}_mae'] * _scales[target].mean()
+        
+        metrics.update({'loss': loss})
+        metrics.update({'loss_mae': loss_mae})
+
+        return loss, metrics
+
+    return val_fn
 
 
 def make_training_step_fn(
@@ -278,6 +518,7 @@ def fit(
         batch_max_num_graphs,
         batch_max_num_pairs,
         params=None,
+        val_fn=None,
         num_epochs: int = 100,
         ckpt_dir: str = None,
         ckpt_manager_options: dict = None,
@@ -286,7 +527,9 @@ def fit(
         training_seed: int = 0,
         model_seed: int = 0,
         use_wandb: bool = True,
-        log_gradient_values: bool = False
+        log_gradient_values: bool = False,
+        use_robust_loss_validation: bool = False,
+        robust_loss_alpha_validation: float = 1.99
 ):
     """
     Fit model.
@@ -304,6 +547,8 @@ def fit(
         batch_max_num_pairs (int): Maximal number of pairs in long-range indices.
         params: Parameters to start from during training. If not given, either new parameters are initialized randomly
             or loaded from ckpt_dir if the checkpoint already exists and `allow_restart=True`.
+        val_fn (Callable, optional): Validation function to use for metrics during validation. 
+            If None, loss_fn will be used. Defaults to None.
         num_epochs (int): Number of training epochs.
         ckpt_dir (str): Checkpoint path.
         ckpt_manager_options (dict): Checkpoint manager options.
@@ -313,6 +558,8 @@ def fit(
         model_seed (int): Random seed for model initialization.
         use_wandb (bool): Log statistics to WeightsAndBias. If true, wandb.init() must be called before call to fit().
         log_gradient_values (bool): Gradient values for each set of weights is logged.
+        use_robust_loss_validation (bool): Whether to use robust loss during validation. Defaults to False.
+        robust_loss_alpha_validation (float): Alpha parameter for robust loss during validation. Defaults to 1.99.
     Returns:
 
     """
@@ -346,8 +593,21 @@ def fit(
     )
 
     validation_step_fn = make_validation_step_fn(
-        loss_fn
+        val_fn
     )
+
+
+    # Print all parameter keys and shapes
+    def print_param_shapes(params, prefix=''):
+        if isinstance(params, dict):
+            for key, value in params.items():
+                if isinstance(value, (dict, jnp.ndarray)):
+                    if isinstance(value, jnp.ndarray):
+                        print(f"{prefix}{key}: {value.shape}")
+                    else:
+                        print(f"{prefix}{key}:")
+                        print_param_shapes(value, prefix + '  ')
+
 
     processed_graphs = 0
     processed_nodes = 0
@@ -387,7 +647,79 @@ def fit(
                         params = checkpoint_utils.load_params_from_checkpoint(
                             ckpt_dir=ckpt_dir
                         )
+                        print(f"Loaded parameters from {ckpt_dir}")
+                        print(f"Params keys: {params.keys()}")
+                        print("\nParameter shapes:")
+                        print("=" * 50)
+                        print_param_shapes(params)
+                        print("=" * 50)
+                        print('This is fit_from_iterator function')
+                        # Modify parameters to handle theory levels
+                        if 'params' in params and 'observables_0' in params['params']:
+                            num_theory_levels = 16
+                            # Modify energy_offset
+                            if 'energy_offset' in params['params']['observables_0']:
+                                print("\nOriginal energy_offset:")
+                                print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+                                print("Values:", params['params']['observables_0']['energy_offset'])
+                                old_energy_offset = params['params']['observables_0']['energy_offset']
+                                
+                                # Only tile if shape is 1D
+                                if len(old_energy_offset.shape) == 1:
+                                    new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+                                    params['params']['observables_0']['energy_offset'] = new_energy_offset
+                                    print("Applied tiling to energy_offset")
+                                else:
+                                    print("Energy offset already has multiple dimensions, no tiling applied")
+                                
+                                print("\nNew energy_offset:")
+                                print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+                                print("Values:", params['params']['observables_0']['energy_offset'])
+
+                            # Modify atomic_scales
+                            if 'atomic_scales' in params['params']['observables_0']:
+                                print("\nOriginal atomic_scales:")
+                                print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+                                print("Values:", params['params']['observables_0']['atomic_scales'])
+                                old_atomic_scales = params['params']['observables_0']['atomic_scales']
+                                
+                                # Only tile if shape is 1D
+                                if len(old_atomic_scales.shape) == 1:
+                                    new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+                                    params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+                                    print("Applied tiling to atomic_scales")
+                                else:
+                                    print("Atomic scales already has multiple dimensions, no tiling applied")
+                                
+                                print("\nNew atomic_scales:")
+                                print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+                                print("Values:", params['params']['observables_0']['atomic_scales'])
+
+                            # Modify energy_dense_final
+                            if 'energy_dense_final' in params['params']['observables_0']:
+                                print("\nOriginal energy_dense_final kernel:")
+                                print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+                                print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+                                old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+                                
+                                # Check the shape to determine if tiling is needed
+                                if old_kernel.shape[1] == 1:
+                                    new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+                                    params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+                                    print("Applied tiling to energy_dense_final kernel")
+                                else:
+                                    print("Energy dense final kernel already has correct output dimension, no tiling applied")
+                                
+                                print("\nNew energy_dense_final kernel:")
+                                print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+                                print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+
+                            print("\nParameter shapes after modification:")
+                            print("=" * 50)
+                            print_param_shapes(params)
+                            print("=" * 50)
                         step += latest_step
+                        
                         print(f'Re-start training from {latest_step}.')
                     else:
                         raise RuntimeError(f'{ckpt_dir} already exists at step {latest_step}. If you want to re-start '
@@ -489,7 +821,9 @@ def fit_from_iterator(
         batch_max_num_edges,
         batch_max_num_graphs,
         batch_max_num_pairs,
+        num_epochs,
         params=None,
+        val_fn=None,
         ckpt_dir: str = None,
         ckpt_manager_options: dict = None,
         eval_every_num_steps: int = 1000,
@@ -497,7 +831,9 @@ def fit_from_iterator(
         training_seed: int = 0,
         model_seed: int = 0,
         use_wandb: bool = True,
-        log_gradient_values: bool = False
+        log_gradient_values: bool = False,
+        use_robust_loss_validation: bool = False,
+        robust_loss_alpha_validation: float = 1.99
 ):
     """
     Fit model.
@@ -513,8 +849,11 @@ def fit_from_iterator(
         batch_max_num_edges (int): Maximal number of edges per batch.
         batch_max_num_graphs (int): Maximal number of graphs per batch.
         batch_max_num_pairs (int): Maximal number of pairs in long-range indices.
+        num_epochs (int): Number of epochs to train for.
         params: Parameters to start from during training. If not given, either new parameters are initialized randomly
             or loaded from ckpt_dir if the checkpoint already exists and `allow_restart=True`.
+        val_fn (Callable, optional): Validation function to use for metrics during validation. 
+            If None, loss_fn will be used. Defaults to None.
         ckpt_dir (str): Checkpoint path.
         ckpt_manager_options (dict): Checkpoint manager options.
         eval_every_num_steps (int): Evaluate the metrics every num-th step
@@ -523,6 +862,8 @@ def fit_from_iterator(
         model_seed (int): Random seed for model initialization.
         use_wandb (bool): Log statistics to WeightsAndBias. If true, wandb.init() must be called before call to fit().
         log_gradient_values (bool): Gradient values for each set of weights is logged.
+        use_robust_loss_validation (bool): Whether to use robust loss during validation. Defaults to False.
+        robust_loss_alpha_validation (float): Alpha parameter for robust loss during validation. Defaults to 1.99.
     Returns:
 
     """
@@ -557,8 +898,19 @@ def fit_from_iterator(
     )
 
     validation_step_fn = make_validation_step_fn(
-        loss_fn
+        val_fn
     )
+
+    # Print all parameter keys and shapes
+    def print_param_shapes(params, prefix=''):
+        if isinstance(params, dict):
+            for key, value in params.items():
+                if isinstance(value, (dict, jnp.ndarray)):
+                    if isinstance(value, jnp.ndarray):
+                        print(f"{prefix}{key}: {value.shape}")
+                    else:
+                        print(f"{prefix}{key}:")
+                        print_param_shapes(value, prefix + '  ')
 
     processed_graphs = 0
     processed_nodes = 0
@@ -566,119 +918,177 @@ def fit_from_iterator(
 
     opt_state = None
 
-    # Create batched graphs from iterator over single graphs.
-    training_iterator_batched = jraph.dynamically_batch(
-        training_iterator.as_numpy_iterator(),
-        n_node=batch_max_num_nodes,
-        n_edge=batch_max_num_edges,
-        n_graph=batch_max_num_graphs,
-        n_pairs=batch_max_num_pairs
-    )
-
-    # Start iteration over batched graphs.
-    for graph_batch_training in training_iterator_batched:
-        batch_training = graph_to_batch_fn(graph_batch_training)
-        processed_graphs += batch_training['num_of_non_padded_graphs']
-        processed_nodes += batch_max_num_nodes - jraph.get_number_of_padding_with_graphs_nodes(graph_batch_training)
-        # Training data is numpy arrays so we now transform them to jax.numpy arrays.
-        batch_training = jax.tree_util.tree_map(jnp.array, batch_training)
-
-        # If params are None (in the first step), initialize the parameters or load from existing checkpoint.
-        if params is None:
-            # Check if checkpoint already exists.
-            latest_step = ckpt_mngr.latest_step()
-            if latest_step is not None:
-                if allow_restart:
-                    params = checkpoint_utils.load_params_from_checkpoint(
-                        ckpt_dir=ckpt_dir
-                    )
-                    # params = ckpt_mngr.restore(
-                    #     latest_step,
-                    #     args=checkpoint.args.Composite(params=checkpoint.args.StandardRestore())
-                    # )['params']
-                    step += latest_step
-                    print(f'Re-start training from {latest_step}.')
-                else:
-                    raise RuntimeError(f'{ckpt_dir} already exists at step {latest_step}. If you want to re-start '
-                                       f'training, set `allow_restart=True`.')
-            else:
-                params = model.init(jax_rng, batch_training)
-
-        # If optimizer state is None (in the first step), initialize from the parameter pyTree.
-        if opt_state is None:
-            opt_state = optimizer.init(params)
-
-        # Make sure parameters and opt_state are set.
-        assert params is not None
-        assert opt_state is not None
-
-        params, opt_state, train_metrics = training_step_fn(params, opt_state, batch_training)
-        step += 1
-        train_metrics_np = jax.device_get(train_metrics)
-
-        # Log training metrics.
+    for epoch in range(num_epochs):
         if use_wandb:
-            wandb.log(
-                {f'train_{k}': v for (k, v) in train_metrics_np.items()},
-                step=step
-            )
+            wandb.log({"epoch": epoch})
+        print(f'Epoch {epoch} of {num_epochs}')
+        training_iterator_loop = training_iterator.next_epoch(split='train', mode='train')
+        for graph_batch_training in training_iterator_loop:
+            batch_training = graph_to_batch_fn(graph_batch_training)
+            processed_graphs += batch_training['num_of_non_padded_graphs']
+            processed_nodes += batch_max_num_nodes - jraph.get_number_of_padding_with_graphs_nodes(graph_batch_training)
+            # Training data is numpy arrays so we now transform them to jax.numpy arrays.
+            batch_training = jax.tree_util.tree_map(jnp.array, batch_training)
 
-        # Start validation process.
-        if step % eval_every_num_steps == 0:
-            validation_iterator_batched = jraph.dynamically_batch(
-                validation_iterator.as_numpy_iterator(),
-                n_node=batch_max_num_nodes,
-                n_edge=batch_max_num_edges,
-                n_graph=batch_max_num_graphs,
-                n_pairs=batch_max_num_pairs
-            )
+            # If params are None (in the first step), initialize the parameters or load from existing checkpoint.
+            if params is None:
+                # Check if checkpoint already exists.
+                latest_step = ckpt_mngr.latest_step()
+                if latest_step is not None:
+                    if allow_restart:
+                        params = checkpoint_utils.load_params_from_checkpoint(
+                            ckpt_dir=ckpt_dir
+                        )
+                        print(f"Loaded parameters from {ckpt_dir}")
+                        print(f"Params keys: {params.keys()}")
+                        print("\nParameter shapes:")
+                        print("=" * 50)
+                        print_param_shapes(params)
+                        print("=" * 50)
+                        print('This is fit_from_iterator function')
+                        # Modify parameters to handle theory levels
+                        if 'params' in params and 'observables_0' in params['params']:
+                            num_theory_levels = 16
+                            # Modify energy_offset
+                            if 'energy_offset' in params['params']['observables_0']:
+                                print("\nOriginal energy_offset:")
+                                print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+                                print("Values:", params['params']['observables_0']['energy_offset'])
+                                old_energy_offset = params['params']['observables_0']['energy_offset']
+                                
+                                # Only tile if shape is 1D
+                                if len(old_energy_offset.shape) == 1:
+                                    new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+                                    params['params']['observables_0']['energy_offset'] = new_energy_offset
+                                    print("Applied tiling to energy_offset")
+                                else:
+                                    print("Energy offset already has multiple dimensions, no tiling applied")
+                                
+                                print("\nNew energy_offset:")
+                                print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+                                print("Values:", params['params']['observables_0']['energy_offset'])
 
-            # Start iteration over validation batches.
-            eval_metrics: Any = None
-            eval_collection: Any = None
-            for graph_batch_validation in validation_iterator_batched:
-                batch_validation = graph_to_batch_fn(graph_batch_validation)
-                batch_validation = jax.tree_util.tree_map(jnp.array, batch_validation)
+                            # Modify atomic_scales
+                            if 'atomic_scales' in params['params']['observables_0']:
+                                print("\nOriginal atomic_scales:")
+                                print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+                                print("Values:", params['params']['observables_0']['atomic_scales'])
+                                old_atomic_scales = params['params']['observables_0']['atomic_scales']
+                                
+                                # Only tile if shape is 1D
+                                if len(old_atomic_scales.shape) == 1:
+                                    new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+                                    params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+                                    print("Applied tiling to atomic_scales")
+                                else:
+                                    print("Atomic scales already has multiple dimensions, no tiling applied")
+                                
+                                print("\nNew atomic_scales:")
+                                print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+                                print("Values:", params['params']['observables_0']['atomic_scales'])
 
-                eval_out = validation_step_fn(
-                    params,
-                    batch_validation
-                )
-                # The metrics are created dynamically during the first evaluation batch, since we aim to support
-                # all kinds of targets beyond energies and forces at some point.
-                if eval_collection is None:
-                    eval_collection = clu_metrics.Collection.create(
-                        **{k: clu_metrics.Average.from_output(f'{k}') for k in eval_out.keys()})
+                            # Modify energy_dense_final
+                            if 'energy_dense_final' in params['params']['observables_0']:
+                                print("\nOriginal energy_dense_final kernel:")
+                                print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+                                print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+                                old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+                                
+                                # Check the shape to determine if tiling is needed
+                                if old_kernel.shape[1] == 1:
+                                    new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+                                    params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+                                    print("Applied tiling to energy_dense_final kernel")
+                                else:
+                                    print("Energy dense final kernel already has correct output dimension, no tiling applied")
+                                
+                                print("\nNew energy_dense_final kernel:")
+                                print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+                                print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
 
-                eval_metrics = (
-                    eval_collection.single_from_model_output(**eval_out)
-                    if eval_metrics is None
-                    else eval_metrics.merge(eval_collection.single_from_model_output(**eval_out))
-                )
+                            print("\nParameter shapes after modification:")
+                            print("=" * 50)
+                            print_param_shapes(params)
+                            print("=" * 50)
 
-            eval_metrics = eval_metrics.compute()
+                        step += latest_step
+                        print(f'Re-start training from {latest_step}.')
+                    else:
+                        raise RuntimeError(f'{ckpt_dir} already exists at step {latest_step}. If you want to re-start '
+                                           f'training, set `allow_restart=True`.')
+                else:
+                    print(f'Initialize new parameters.')
+                    params = model.init(jax_rng, batch_training)
 
-            # Convert to dict to log with weights and bias.
-            eval_metrics = {
-                f'eval_{k}': float(v) for k, v in eval_metrics.items()
-            }
+            # If optimizer state is None (in the first step), initialize from the parameter pyTree.
+            if opt_state is None:
+                opt_state = optimizer.init(params)
 
-            # Save checkpoint.
-            ckpt_mngr.save(
-                step,
-                args=ocp.args.Composite(params=ocp.args.StandardSave(params)),
-                metrics={
-                    'loss': eval_metrics['eval_loss']
-                }
-            )
+            # Make sure parameters and opt_state are set.
+            assert params is not None
+            assert opt_state is not None
 
-            # Log to weights and bias.
+            params, opt_state, train_metrics = training_step_fn(params, opt_state, batch_training)
+            step += 1
+            train_metrics_np = jax.device_get(train_metrics)
+
+            # Log training metrics.
             if use_wandb:
                 wandb.log(
-                    eval_metrics,
+                    {f'train_{k}': v for (k, v) in train_metrics_np.items()},
                     step=step
                 )
-        # Finished validation process.
+
+            # Start validation process.
+            if step % eval_every_num_steps == 0:
+                # Start iteration over validation batches.
+                eval_metrics: Any = None
+                eval_collection: Any = None
+                validation_iterator_loop = validation_iterator.next_epoch(split='train', mode='validation')
+                for graph_batch_validation in validation_iterator_loop:
+                    batch_validation = graph_to_batch_fn(graph_batch_validation)
+                    batch_validation = jax.tree_util.tree_map(jnp.array, batch_validation)
+
+                    eval_out = validation_step_fn(
+                        params,
+                        batch_validation
+                    )
+                    # The metrics are created dynamically during the first evaluation batch, since we aim to support
+                    # all kinds of targets beyond energies and forces at some point.
+                    if eval_collection is None:
+                        eval_collection = clu_metrics.Collection.create(
+                            **{k: clu_metrics.Average.from_output(f'{k}') for k in eval_out.keys()})
+
+                    eval_metrics = (
+                        eval_collection.single_from_model_output(**eval_out)
+                        if eval_metrics is None
+                        else eval_metrics.merge(eval_collection.single_from_model_output(**eval_out))
+                    )
+
+                eval_metrics = eval_metrics.compute()
+
+                # Convert to dict to log with weights and bias.
+                eval_metrics = {
+                    f'eval_{k}': float(v) for k, v in eval_metrics.items()
+                }
+
+                print(print_metrics(f"val_{epoch}_{step}:", eval_metrics))
+                # Save checkpoint.
+                ckpt_mngr.save(
+                    step,
+                    args=ocp.args.Composite(params=ocp.args.StandardSave(params)),
+                    metrics={
+                        'loss': eval_metrics['eval_loss']
+                    }
+                )
+
+                # Log to weights and bias.
+                if use_wandb:
+                    wandb.log(
+                        eval_metrics,
+                        step=step
+                    )
+            # Finished validation process.
 
     # Wait until checkpoint manager completes all save operations.
     ckpt_mngr.wait_until_finished()
