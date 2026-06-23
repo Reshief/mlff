@@ -308,7 +308,7 @@ class mlffCalculatorSparse(Calculator):
                 )
 
         output = self.calculate_fn(system, neighbors)  # note different cell convention
-        self.results = jax.tree_map(lambda x: np.array(x, self.dtype), output)
+        self.results = jax.tree_util.tree_map(lambda x: np.array(x, self.dtype), output)
 
 
 def to_displacement(cell):
@@ -353,7 +353,7 @@ def to_graph(atomic_numbers, positions, cell, neighbors):
 
 @jax.jit
 def add_batch_dim(tree):
-    return jax.tree_map(lambda x: x[None], tree)
+    return jax.tree_util.tree_map(lambda x: x[None], tree)
 
 
 def neighbor_list(
