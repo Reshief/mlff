@@ -37,6 +37,7 @@ class DataSet:
         q_data = {k: v for k, v in self.data.items()}
 
         # if energy exists in data, make sure it has the correct dimensions
+        # FIXME: Allow for per-state energies
         try:
             q_data[self.prop_keys[pn.energy]] = q_data[self.prop_keys[pn.energy]].reshape(-1, 1)
         except KeyError:
