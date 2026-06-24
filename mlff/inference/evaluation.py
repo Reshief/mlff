@@ -4,21 +4,25 @@ import numpy as np
 import logging
 
 from tqdm import tqdm
-from typing import (Any, Callable, Dict, Tuple, Union)
+from typing import Any, Callable, Union
 
 Array = Any
 
 
 def tree_concatenate_tensors(py_tree_1, py_tree_2, axis=0):
-    return jax.tree_util.tree_map(lambda x, y: np.concatenate([x, y], axis=axis), py_tree_1, py_tree_2)
+    return jax.tree_util.tree_map(
+        lambda x, y: np.concatenate([x, y], axis=axis), py_tree_1, py_tree_2
+    )
 
 
-def evaluate_model(params,
-                   obs_fn: Callable,
-                   data: Tuple[Dict, Union[Dict, None]],
-                   batch_size: int,
-                   metric_fn: Dict[str, Callable] = None,
-                   verbose=True) -> Tuple[Dict, Dict]:
+def evaluate_model(
+    params,
+    obs_fn: Callable,
+    data: tuple[dict, dict | None],
+    batch_size: int,
+    metric_fn: dict[str, Callable] | None = None,
+    verbose=True,
+) -> tuple[dict, dict]:
     """
     Evaluate a model, given its params `params` and an observable function `obs_fn`. One can either pass a tuple
     to `data` where the first entry is the input to the observable function and the second is the expected output, or
@@ -55,13 +59,16 @@ def evaluate_model(params,
         )
 
     idxs = jnp.arange(n_data)
-    idxs = idxs[:n_batches * batch_size]  # skip incomplete batch
+    idxs = idxs[: n_batches * batch_size]  # skip incomplete batch
     idxs = idxs.reshape((n_batches, batch_size))
 
     obs_pred = {}
-    print('Model evaluation (Total number of data: {}, number of batches: {}, batch size: {}'
-                 .format(int(n_batches * batch_size), n_batches, batch_size))
-    for (i, idx) in enumerate(tqdm(idxs)):
+    print(
+        "Model evaluation (Total number of data: {}, number of batches: {}, batch size: {}".format(
+            int(n_batches * batch_size), n_batches, batch_size
+        )
+    )
+    for i, idx in enumerate(tqdm(idxs)):
         # if verbose:
         #     logging.info("Evaluate batch {} from {}".format(i + 1, n_batches))
 
@@ -72,16 +79,23 @@ def evaluate_model(params,
         else:
             obs_pred = tree_concatenate_tensors(obs_pred, obs_pred_, axis=0)
 
-    inputs = jax.tree_util.tree_map(lambda x: x[:int(n_batches * batch_size)], inputs)
+    inputs = jax.tree_util.tree_map(lambda x: x[: int(n_batches * batch_size)], inputs)
     if targets is not None:
-        targets = jax.tree_util.tree_map(lambda x: x[:int(n_batches * batch_size)], targets)
+        targets = jax.tree_util.tree_map(
+            lambda x: x[: int(n_batches * batch_size)], targets
+        )
+    else:
+        targets = {}
 
     # make sure that metrics are only calculated for quantities that appear in both, the output and the target.
     if len(set(obs_pred.keys()) ^ set(targets.keys())) != 0:
         _joint_keys = set(obs_pred.keys()) & set(targets.keys())
-        logging.warning('The model predicts quantities with keys {} whereas the data it is '
-                        'evaluated on has keys {}. Only evaluating the model on joint keys {}.'
-                        .format(list(obs_pred.keys()), list(targets.keys()), _joint_keys))
+        logging.warning(
+            "The model predicts quantities with keys {} whereas the data it is "
+            "evaluated on has keys {}. Only evaluating the model on joint keys {}.".format(
+                list(obs_pred.keys()), list(targets.keys()), _joint_keys
+            )
+        )
         obs_pred_eval = {k: v for (k, v) in obs_pred.items() if k in _joint_keys}
         target_eval = {k: v for (k, v) in targets.items() if k in _joint_keys}
     else:
@@ -92,15 +106,19 @@ def evaluate_model(params,
     if metric_fn is not None:
         # flattened_predictions = jax.tree_util.tree_map(lambda x: x[:int(n_batches * batch_size)], obs_pred)
         for m_name, m_fn in metric_fn.items():
-            metrics[m_name] = jax.tree_util.tree_map(lambda x, y: m_fn(prediction=x, target=y), obs_pred_eval, target_eval)
+            metrics[m_name] = jax.tree_util.tree_map(
+                lambda x, y: m_fn(prediction=x, target=y), obs_pred_eval, target_eval
+            )
 
-    return metrics, {'inputs': inputs, 'predictions': obs_pred, 'targets': targets}
+    return metrics, {"inputs": inputs, "predictions": obs_pred, "targets": targets}
 
 
-def mae_metric(prediction: Array,
-               target: Array,
-               pad_value: float = None,
-               ignore_nan: bool = True) -> Array:
+def mae_metric(
+    prediction: Array,
+    target: Array,
+    pad_value: float | None = None,
+    ignore_nan: bool = True,
+) -> Array:
     """
     Metric function for mean absolute error. Padding values can be excluded from the metric calculation.
 
@@ -131,10 +149,12 @@ def mae_metric(prediction: Array,
     return np.abs(p[f_idx] - t[f_idx]).mean()
 
 
-def mse_metric(prediction: Array,
-               target: Array,
-               pad_value: float = None,
-               ignore_nan: bool = True) -> Array:
+def mse_metric(
+    prediction: Array,
+    target: Array,
+    pad_value: float | None = None,
+    ignore_nan: bool = True,
+) -> Array:
     """
     Metric function for mean squared error. Padding values can be excluded from the metric calculation.
 
@@ -165,10 +185,12 @@ def mse_metric(prediction: Array,
     return ((p[f_idx] - t[f_idx]) ** 2).mean()
 
 
-def rmse_metric(prediction: Array,
-                target: Array,
-                pad_value: float = None,
-                ignore_nan: bool = True) -> Array:
+def rmse_metric(
+    prediction: Array,
+    target: Array,
+    pad_value: float | None = None,
+    ignore_nan: bool = True,
+) -> Array:
     """
     Metric function for root mean square error. Padding values can be excluded from the metric calculation.
 
@@ -181,13 +203,17 @@ def rmse_metric(prediction: Array,
     Returns: scalar value, shape: (1)
 
     """
-    return np.sqrt(mse_metric(prediction=prediction, target=target, pad_value=pad_value))
+    return np.sqrt(
+        mse_metric(prediction=prediction, target=target, pad_value=pad_value)
+    )
 
 
-def r2_metric(prediction: Array,
-              target: Array,
-              pad_value: float = None,
-              ignore_nan: bool = True) -> float:
+def r2_metric(
+    prediction: Array,
+    target: Array,
+    pad_value: float | None = None,
+    ignore_nan: bool = True,
+) -> float:
     """
     Metric function for R2 (= 1 - (RMSE / STD)^2)
 
