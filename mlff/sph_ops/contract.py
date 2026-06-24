@@ -9,22 +9,24 @@ import pickle
 import itertools as it
 
 from functools import partial
-from typing import (Callable, Sequence)
+from typing import Callable, Sequence
+from jaxtyping import Array as ndarray
 
 
-indx_fn = lambda x: int((x+1)**2) if x >= 0 else 0
+indx_fn = lambda x: int((x + 1) ** 2) if x >= 0 else 0
+
 
 # def load_cgmatrix():
 #     stream = pkg_resources.resource_stream(__name__, 'cgmatrix.npz')
 #     return np.load(stream)['cg']
 def load_cgmatrix():
-    ref = importlib_resources.files(__name__).joinpath('cgmatrix.npz')
+    ref = importlib_resources.files(__name__).joinpath("cgmatrix.npz")
     # with ref.open('rb') as fp:
     #     return np.load(fp.read())['cg']
-    return np.load(ref.open('rb'))['cg']
+    return np.load(ref.open("rb"))["cg"]
 
 
-def init_clebsch_gordan_matrix(degrees, l_out_max=None):
+def init_clebsch_gordan_matrix(degrees: Sequence[int], l_out_max=None):
     """
     Initialize the Clebsch-Gordan matrix (coefficients for the Clebsch-Gordan expansion of spherical basis functions)
     for given ``degrees`` and a maximal output order ``l_out_max`` up to which the given all_degrees shall be
@@ -51,10 +53,16 @@ def init_clebsch_gordan_matrix(degrees, l_out_max=None):
 
     offset_corr = indx_fn(l_in_min - 1)
     _cg = load_cgmatrix()
-    return _cg[offset_corr:indx_fn(_l_out_max), offset_corr:indx_fn(l_in_max), offset_corr:indx_fn(l_in_max)]
+    return _cg[
+        offset_corr : indx_fn(_l_out_max),
+        offset_corr : indx_fn(l_in_max),
+        offset_corr : indx_fn(l_in_max),
+    ]
 
 
-def init_expansion_fn(degrees: Sequence[int], cg: jnp.ndarray) -> Callable[[jnp.ndarray], jnp.ndarray]:
+def init_expansion_fn(
+    degrees: Sequence[int], cg: jnp.ndarray
+) -> Callable[[jnp.ndarray], jnp.ndarray]:
     """
     Initialize function that returns the expansion in CG coefficients for all possible combinations for given
     ``degrees`` up to arbitrary order ``l3``, which is determined by the order along the 0-th axis of CG matrix,
@@ -117,9 +125,17 @@ def init_expansion_fn(degrees: Sequence[int], cg: jnp.ndarray) -> Callable[[jnp.
         >>> gamma_contracted = jnp.triu(J, k=1).sum(axis=(-2, -1))  # shape: (n, m_out)
     """
     segment_ids = jnp.array(
-        [y for y in it.chain(*[[n] * int(2 * degrees[n] + 1) for n in range(len(degrees))])])
+        [
+            y
+            for y in it.chain(
+                *[[n] * int(2 * degrees[n] + 1) for n in range(len(degrees))]
+            )
+        ]
+    )
     num_segments = len(degrees)
-    _segment_sum = partial(jax.ops.segment_sum, segment_ids=segment_ids, num_segments=num_segments)
+    _segment_sum = partial(
+        jax.ops.segment_sum, segment_ids=segment_ids, num_segments=num_segments
+    )
     _v_segment_sum_l1 = jax.vmap(jax.vmap(jax.vmap(_segment_sum)))
     _v_segment_sum_l2 = jax.vmap(jax.vmap(_segment_sum))
     _expansion_fn = jax.jit(lambda x: _v_segment_sum_l1(_v_segment_sum_l2(x * cg)))
@@ -163,47 +179,80 @@ def init_expansion_fn(degrees: Sequence[int], cg: jnp.ndarray) -> Callable[[jnp.
 #     return contraction_fn
 
 
-def make_l0_contraction_fn(degrees, dtype=jnp.float32):
+def make_l0_contraction_fn(
+    degrees: Sequence[int], dtype=jnp.float32
+) -> Callable[[jnp.ndarray], jnp.ndarray]:
+    """Helper function to construct a function to execute the l->0 contraction of an equivariant tensor
+    for a given set of degrees.
+    Degree l=0 will be preprended if missing.
+
+    Parameters
+    ----------
+    degrees : Sequence[int]
+        The sequence of degrees to be considered.
+    dtype : type, optional
+        Data type of the tensor to be contracted, by default jnp.float32.
+        Will determine the data type in which the Clebsch-Gordan coefficients will be loaded
+
+    Returns
+    -------
+    Callable[[ndarray], ndarrray]
+        Function to execute the contraction of a tensor with the specified degrees of equivariant features,
+    """
     # get CG coefficients
-    cg = np.diagonal(init_clebsch_gordan_matrix(degrees=list({0, *degrees}), l_out_max=0), axis1=1, axis2=2)[0]
+    cg = np.diagonal(
+        init_clebsch_gordan_matrix(degrees=list({0, *degrees}), l_out_max=0),
+        axis1=1,
+        axis2=2,
+    )[0]
     # shape: (m_tot**2)
     # if 0 not in degrees:
     #     cg = cg[1:]  # remove degree zero if not in degrees
 
     cg_rep = []
     for d, r in zip(*np.unique(np.array(degrees), return_counts=True)):
-        cg_rep += [np.tile(cg[indx_fn(d - 1): indx_fn(d)], r)]
+        cg_rep += [np.tile(cg[indx_fn(d - 1) : indx_fn(d)], r)]
 
-    cg_rep = np.concatenate(cg_rep)  # shape: (m_tot), m_tot = \sum_l 2l+1 for l in degrees
+    cg_rep = np.concatenate(
+        cg_rep
+    )  # shape: (m_tot), m_tot = \sum_l 2l+1 for l in degrees
     cg_rep = jnp.array(cg_rep, dtype=dtype)  # shape: (m_tot)
 
     segment_ids = jnp.array(
-        [y for y in it.chain(*[[n] * int(2 * degrees[n] + 1) for n in range(len(degrees))])])
+        [
+            y
+            for y in it.chain(
+                *[[n] * int(2 * degrees[n] + 1) for n in range(len(degrees))]
+            )
+        ]
+    )
     num_segments = len(degrees)
-    _segment_sum = jax.vmap(partial(jax.ops.segment_sum, segment_ids=segment_ids, num_segments=num_segments))
+    _segment_sum = jax.vmap(
+        partial(jax.ops.segment_sum, segment_ids=segment_ids, num_segments=num_segments)
+    )
 
-    def contraction_fn(sphc):
+    def contraction_fn(sphc: jnp.ndarray):
         """
         Args:
             sphc (Array): Spherical harmonic coordinates, shape: (n,m_tot)
         Returns: Contraction on degree l=0 for each degree up to l_max, shape: (n,|l|)
         """
 
-        return _segment_sum(sphc*sphc*cg_rep[None, :])  # shape: (n,len(degrees))
+        return _segment_sum(sphc * sphc * cg_rep[None, :])  # shape: (n,len(degrees))
 
     return contraction_fn
 
 
 def load_u_matrix():
-    ref = importlib_resources.files(__name__).joinpath('u_matrix.pickle')
+    ref = importlib_resources.files(__name__).joinpath("u_matrix.pickle")
     # with ref.open('rb') as fp:
     #    return pickle.load(fp)
-    return pickle.load(ref.open('rb'))
+    return pickle.load(ref.open("rb"))
 
 
 def degrees_to_str(x):
     _x = [str(y) for y in x]
-    return ''.join(_x)
+    return "".join(_x)
 
 
 _u_matrix = load_u_matrix()
@@ -228,6 +277,7 @@ class SymmetricContraction(nn.Module):
             are calculated and their sum is returned.
         n_node_type (int): Number of different node types.
     """
+
     degrees_out: Sequence[int]
     degrees_in: Sequence[int]
     n_feature: int
@@ -238,7 +288,11 @@ class SymmetricContraction(nn.Module):
         contractions = {}
         for degree_out in self.degrees_out:
             contractions[degree_out] = ContractionToIrrep(
-                degree_out, self.degrees_in, self.n_feature, self.max_body_order, self.n_node_type
+                degree_out,
+                self.degrees_in,
+                self.n_feature,
+                self.max_body_order,
+                self.n_node_type,
             )
         self.contractions = contractions
 
@@ -280,6 +334,7 @@ class ContractionToIrrep(nn.Module):
             are calculated and their sum is returned.
         n_node_type: (int) Number of different node types.
     """
+
     degree_out: int
     degrees_in: Sequence[int]
     n_feature: int
@@ -288,7 +343,9 @@ class ContractionToIrrep(nn.Module):
 
     def setup(self) -> None:
         if self.max_body_order < 2:
-            raise ValueError(f"Maximal body order has to be larger than 2. Body order is {self.max_body_order}.")
+            raise ValueError(
+                f"Maximal body order has to be larger than 2. Body order is {self.max_body_order}."
+            )
 
         self.correlation = self.max_body_order - 2
         self.scalar_out = self.degree_out == 0
@@ -296,9 +353,9 @@ class ContractionToIrrep(nn.Module):
         U_matrices = []
 
         for nu in range(1, self.max_body_order):
-            U = get_U_matrix(degrees_in=self.degrees_in,
-                             degree_out=self.degree_out,
-                             correlation=nu)
+            U = get_U_matrix(
+                degrees_in=self.degrees_in, degree_out=self.degree_out, correlation=nu
+            )
             if self.degrees_in == [0]:
                 # U matrix for single scalar input is missing all but its
                 # last dimension (all size 1), we need to add it manually
