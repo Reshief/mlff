@@ -171,7 +171,7 @@ class AttentionBlock(nn.Module):
     num_heads: int = 4
     num_features_head: int = 32
     normalization: str = 'sqrt_num_features'
-    avg_num_neighbors: float = None
+    avg_num_neighbors: float|None = None
     qk_non_linearity: Callable = jax.nn.silu
     activation_fn: Callable = jax.nn.silu
     output_is_zero_at_init: bool = False
