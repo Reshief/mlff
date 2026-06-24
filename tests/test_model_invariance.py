@@ -20,7 +20,7 @@ def test_SO3_invariance_so3krates_repeated_degrees():
                     n_layer=2,
                     prop_keys=prop_keys,
                     geometry_embed_kwargs={'degrees': [1, 2, 2, 3]},
-                    so3krates_layer_kwargs={'n_heads': 4,
+                    so3krates_layer_kwargs={'num_heads': 4,
                                             'degrees': [1, 2, 2, 3],
                                             }
                     )

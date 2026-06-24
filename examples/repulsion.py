@@ -86,7 +86,7 @@ net = So3krates(F=32,
                 geometry_embed_kwargs={'degrees': [1, 2],
                                        'r_cut': r_cut
                                        },
-                so3krates_layer_kwargs={'n_heads': 2,
+                so3krates_layer_kwargs={'num_heads': 2,
                                         'degrees': [1, 2]})
 
 obs_fn = get_obs_and_force_fn(net)

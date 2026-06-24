@@ -351,10 +351,10 @@ def train_so3krates():
     else:
         scales = None
 
-    n_heads = args.H
+    num_heads = args.H
 
     so3krates_layer_kwargs = {'degrees': degrees,
-                              'n_heads': n_heads}
+                              'num_heads': num_heads}
 
     if args.so3krates_layer_kwargs is not None:
         so3krates_layer_kwargs.update(args.so3krates_layer_kwargs)

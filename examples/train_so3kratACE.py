@@ -55,7 +55,7 @@ net = So3kratACE(F=32,
                  geometry_embed_kwargs={'degrees': [1, 2],
                                         'r_cut': r_cut
                                         },
-                 so3kratace_layer_kwargs={'n_heads': 2,
+                 so3kratace_layer_kwargs={'num_heads': 2,
                                           'degrees': [1, 2],
                                           'max_body_order': 3,
                                           'bo_features': 16})

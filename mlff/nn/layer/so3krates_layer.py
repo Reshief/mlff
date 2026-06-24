@@ -30,7 +30,7 @@ class So3kratesLayer(BaseSubModule):
     residual_mlp_1: bool = False
     residual_mlp_2: bool = False
 
-    n_heads: int = 4
+    num_heads: int = 4
 
     final_layer: bool = False
     non_local_sphc: bool = False
@@ -84,6 +84,14 @@ class So3kratesLayer(BaseSubModule):
         Returns:
 
         """
+
+        num_features = x.shape[-1]
+        assert num_features % self.num_heads == 0, "The number of invariant features must be divisible by the number of attention heads to comply with euclidean self-attention requirements"
+
+        # tot_num_heads = self.num_heads + len(self.degrees)
+        assert num_features % len(self.degrees) == 0, "The number of invariant features must be divisible by the spherical harmonics degree to comply with spherical self-attention requirements"
+
+
         self.sow('record', 'chi_in', chi)
 
         chi_ij = safe_scale(jax.vmap(lambda i, j: chi[j] - chi[i])(idx_i, idx_j),
@@ -109,7 +117,7 @@ class So3kratesLayer(BaseSubModule):
                                rad_filter_features=self.fb_rad_filter_features,
                                sph_filter_features=self.fb_sph_filter_features,
                                attention=self.fb_attention,
-                               n_heads=self.n_heads)(x=x_pre_1,
+                               num_heads=self.num_heads)(x=x_pre_1,
                                                      rbf_ij=rbf_ij,
                                                      d_chi_ij_l=m_chi_ij,
                                                      phi_r_cut=phi_r_cut,
@@ -186,7 +194,7 @@ class So3kratesLayer(BaseSubModule):
                                    'gb_rad_filter_features': self.gb_rad_filter_features,
                                    'gb_sph_filter_features': self.gb_sph_filter_features,
                                    'gb_attention': self.gb_attention,
-                                   'n_heads': self.n_heads,
+                                   'num_heads': self.num_heads,
                                    'residual_mlp_1': self.residual_mlp_1,
                                    'residual_mlp_2': self.residual_mlp_2,
                                    'non_local_sphc': self.non_local_sphc,
@@ -209,24 +217,24 @@ class FeatureBlock(nn.Module):
     rad_filter_features: Sequence[int]
     sph_filter_features: Sequence[int]
     attention: str  # TODO: depracated
-    n_heads: int
+    num_heads: int
 
     def setup(self):
         if self.filter == 'radial':
-            self.filter_fn = InvariantFilter(n_heads=1,
+            self.filter_fn = InvariantFilter(num_heads=1,
                                              features=self.rad_filter_features,
                                              activation_fn=silu)
         elif self.filter == 'radial_spherical':
-            self.filter_fn = RadialSphericalFilter(rad_n_heads=1,
+            self.filter_fn = RadialSphericalFilter(rad_num_heads=1,
                                                    rad_features=self.rad_filter_features,
-                                                   sph_n_heads=1,
+                                                   sph_num_heads=1,
                                                    sph_features=self.sph_filter_features,
                                                    activation_fn=silu)
         else:
             msg = "Filter argument `{}` is not a valid value.".format(self.filter)
             raise ValueError(msg)
 
-        self.attention_fn = ConvAttention(n_heads=self.n_heads)
+        self.attention_fn = ConvAttention(num_heads=self.num_heads)
 
     @nn.compact
     def __call__(self,
@@ -274,20 +282,20 @@ class GeometricBlock(nn.Module):
 
     def setup(self):
         if self.filter == 'radial':
-            self.filter_fn = InvariantFilter(n_heads=1,
+            self.filter_fn = InvariantFilter(num_heads=1,
                                              features=self.rad_filter_features,
                                              activation_fn=silu)
         elif self.filter == 'radial_spherical':
-            self.filter_fn = RadialSphericalFilter(rad_n_heads=1,
+            self.filter_fn = RadialSphericalFilter(rad_num_heads=1,
                                                    rad_features=self.rad_filter_features,
-                                                   sph_n_heads=1,
+                                                   sph_num_heads=1,
                                                    sph_features=self.sph_filter_features,
                                                    activation_fn=silu)
         else:
             msg = "Filter argument `{}` is not a valid value.".format(self.filter)
             raise ValueError(msg)
 
-        self.attention_fn = SphConvAttention(n_heads=len(self.degrees), harmonic_orders=self.degrees)
+        self.attention_fn = SphConvAttention(num_heads=len(self.degrees), harmonic_orders=self.degrees)
 
     @nn.compact
     def __call__(self,
@@ -380,18 +388,18 @@ class InteractionBlock(nn.Module):
 
 
 class InvariantFilter(nn.Module):
-    n_heads: int
+    num_heads: int
     features: Sequence[int]
     activation_fn: Callable = silu
 
     def setup(self):
-        assert self.features[-1] % self.n_heads == 0
+        assert self.features[-1] % self.num_heads == 0, f"The number of invariant features ({self.features[-1]}) must be divisible by the number of attention heads ({self.num_heads})"
 
-        f_out = int(self.features[-1] / self.n_heads)
+        f_out = int(self.features[-1] / self.num_heads)
         self._features = [*self.features[:-1], f_out]
         self.filter_fn = nn.vmap(MLP,
                                  in_axes=None, out_axes=-2,
-                                 axis_size=self.n_heads,
+                                 axis_size=self.num_heads,
                                  variable_axes={'params': 0},
                                  split_rngs={'params': True}
                                  )
@@ -409,38 +417,38 @@ class InvariantFilter(nn.Module):
         Returns: filter values, shape: (...,F)
 
         """
-        w = self.filter_fn(self._features, self.activation_fn)(rbf)  # shape: (...,n_heads,F_head)
+        w = self.filter_fn(self._features, self.activation_fn)(rbf)  # shape: (...,num_heads,F_head)
         w = w.reshape(*rbf.shape[:-1], -1)  # shape: (...,n,F)
         return w
 
 
 class RadialSphericalFilter(nn.Module):
-    rad_n_heads: int
+    rad_num_heads: int
     rad_features: Sequence[int]
-    sph_n_heads: int
+    sph_num_heads: int
     sph_features: Sequence[int]
     activation_fn: Callable = silu
 
     def setup(self):
-        assert self.rad_features[-1] % self.rad_n_heads == 0
-        assert self.sph_features[-1] % self.sph_n_heads == 0
+        assert self.rad_features[-1] % self.rad_num_heads == 0, f"The number of radial features ({self.rad_features[-1]}) must be divisible by the number of radial attention heads ({self.rad_num_heads})"
+        assert self.sph_features[-1] % self.sph_num_heads == 0, f"The number of spherical features ({self.sph_features[-1]}) must be divisible by the number of spherical attention heads ({self.sph_num_heads})"
 
-        f_out_rad = int(self.rad_features[-1] / self.rad_n_heads)
-        f_out_sph = int(self.sph_features[-1] / self.sph_n_heads)
+        f_out_rad = int(self.rad_features[-1] / self.rad_num_heads)
+        f_out_sph = int(self.sph_features[-1] / self.sph_num_heads)
 
         self._rad_features = [*self.rad_features[:-1], f_out_rad]
         self._sph_features = [*self.sph_features[:-1], f_out_sph]
 
         self.rad_filter_fn = nn.vmap(MLP,
                                      in_axes=None, out_axes=-2,
-                                     axis_size=self.rad_n_heads,
+                                     axis_size=self.rad_num_heads,
                                      variable_axes={'params': 0},
                                      split_rngs={'params': True}
                                      )
 
         self.sph_filter_fn = nn.vmap(MLP,
                                      in_axes=None, out_axes=-2,
-                                     axis_size=self.sph_n_heads,
+                                     axis_size=self.sph_num_heads,
                                      variable_axes={'params': 0},
                                      split_rngs={'params': True}
                                      )
@@ -459,26 +467,26 @@ class RadialSphericalFilter(nn.Module):
         Returns: filter values, shape: (...,F)
 
         """
-        w = self.rad_filter_fn(self._rad_features, self.activation_fn)(rbf)  # shape: (...,n_heads,F_head)
-        w += self.sph_filter_fn(self._sph_features, self.activation_fn)(d_gamma)  # shape: (...,n_heads,F_head)
+        w = self.rad_filter_fn(self._rad_features, self.activation_fn)(rbf)  # shape: (...,num_heads,F_head)
+        w += self.sph_filter_fn(self._sph_features, self.activation_fn)(d_gamma)  # shape: (...,num_heads,F_head)
         w = w.reshape(*rbf.shape[:-1], -1)  # shape: (...,n,n,F)
         return w
 
 
 class ConvAttention(nn.Module):
-    n_heads: int
+    num_heads: int
 
     def setup(self):
         self.coeff_fn = nn.vmap(ConvAttentionCoefficients,
                                 in_axes=(-2, -2, None, None), out_axes=-1,
-                                axis_size=self.n_heads,
+                                axis_size=self.num_heads,
                                 variable_axes={'params': 0},
                                 split_rngs={'params': True}
                                 )
 
         self.aggregate_fn = nn.vmap(AttentionAggregation,
                                     in_axes=(-2, -1, None, None), out_axes=-2,
-                                    axis_size=self.n_heads,
+                                    axis_size=self.num_heads,
                                     variable_axes={'params': 0},
                                     split_rngs={'params': True}
                                     )
@@ -495,10 +503,10 @@ class ConvAttention(nn.Module):
         Returns:
 
         """
-        inv_x_head_split, x_heads = equal_head_split(x, n_heads=self.n_heads)  # shape: (n,n_heads,F_head)
-        _, w_heads = equal_head_split(w_ij, n_heads=self.n_heads)  # shape: (n_pairs,n_heads,F_head)
-        alpha = self.coeff_fn()(x_heads, w_heads, idx_i, idx_j)  # shape: (n_pairs,n_heads)
-        alpha = safe_scale(alpha, scale=pair_mask[:, None] * phi_r_cut[:, None])  # shape: (n_pairs,n_heads)
+        inv_x_head_split, x_heads = equal_head_split(x, num_heads=self.num_heads)  # shape: (n,num_heads,F_head)
+        _, w_heads = equal_head_split(w_ij, num_heads=self.num_heads)  # shape: (n_pairs,num_heads,F_head)
+        alpha = self.coeff_fn()(x_heads, w_heads, idx_i, idx_j)  # shape: (n_pairs,num_heads)
+        alpha = safe_scale(alpha, scale=pair_mask[:, None] * phi_r_cut[:, None])  # shape: (n_pairs,num_heads)
 
         # save attention values for later analysis
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -510,7 +518,7 @@ class ConvAttention(nn.Module):
 
 
 class SphConvAttention(nn.Module):
-    n_heads: int
+    num_heads: int
     harmonic_orders: Sequence[int]
 
     def setup(self):
@@ -518,7 +526,7 @@ class SphConvAttention(nn.Module):
         self.repeat_fn = partial(jnp.repeat, repeats=jnp.array(_repeats), axis=-1, total_repeat_length=sum(_repeats))
         self.coeff_fn = nn.vmap(ConvAttentionCoefficients,
                                 in_axes=(-2, -2, None, None), out_axes=-1,
-                                axis_size=self.n_heads,
+                                axis_size=self.num_heads,
                                 variable_axes={'params': 0},
                                 split_rngs={'params': True}
                                 )
@@ -545,13 +553,13 @@ class SphConvAttention(nn.Module):
 
         """
 
-        # number of heads equals number of harmonics, i.e. n_heads = n_l
-        inv_x_head_split, x_heads = equal_head_split(x, n_heads=self.n_heads)  # shape: (n,n_heads,F_head)
-        _, w_ij_heads = equal_head_split(w_ij, n_heads=self.n_heads)  # shape: (n_pairs,n_heads,F_head)
-        alpha_ij = self.coeff_fn()(x_heads, w_ij_heads, idx_i, idx_j)  # shape: (n_pairs,n_heads)
-        alpha_r_ij = safe_scale(alpha_ij, scale=pair_mask[:, None] * phi_r_cut[:, None])  # shape: (n_pairs,n_heads)
-        alpha_s_ij = safe_scale(alpha_ij, scale=pair_mask[:, None] * phi_chi_cut[:, None])  # shape: (n_pairs,n_heads)
-        alpha_ij = alpha_r_ij + alpha_s_ij  # shape: (n_pairs,n_heads)
+        # number of heads equals number of harmonics, i.e. num_heads = n_l
+        inv_x_head_split, x_heads = equal_head_split(x, num_heads=self.num_heads)  # shape: (n,num_heads,F_head)
+        _, w_ij_heads = equal_head_split(w_ij, num_heads=self.num_heads)  # shape: (n_pairs,num_heads,F_head)
+        alpha_ij = self.coeff_fn()(x_heads, w_ij_heads, idx_i, idx_j)  # shape: (n_pairs,num_heads)
+        alpha_r_ij = safe_scale(alpha_ij, scale=pair_mask[:, None] * phi_r_cut[:, None])  # shape: (n_pairs,num_heads)
+        alpha_s_ij = safe_scale(alpha_ij, scale=pair_mask[:, None] * phi_chi_cut[:, None])  # shape: (n_pairs,num_heads)
+        alpha_ij = alpha_r_ij + alpha_s_ij  # shape: (n_pairs,num_heads)
 
         # save attention values for later analysis
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -608,8 +616,8 @@ class AttentionAggregation(nn.Module):
         return segment_sum(alpha_ij[:, None] * v_j, segment_ids=idx_i, num_segments=x.shape[0])  # shape: (n,F)
 
 
-def equal_head_split(x: jnp.ndarray, n_heads: int) -> (Callable, jnp.ndarray):
+def equal_head_split(x: jnp.ndarray, num_heads: int) -> (Callable, jnp.ndarray):
     def inv_split(inputs):
         return inputs.reshape(*x.shape[:-1], -1)
 
-    return inv_split, x.reshape(*x.shape[:-1], n_heads, -1)
+    return inv_split, x.reshape(*x.shape[:-1], num_heads, -1)

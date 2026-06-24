@@ -35,7 +35,7 @@ def test_so3krates_init():
         assert u["gb_attention"] == "conv_att"
         assert u["fb_filter"] == "radial_spherical"
         assert u["gb_filter"] == "radial_spherical"
-        assert u["n_heads"] == 4
+        assert u["num_heads"] == 4
         assert not u["final_layer"]
         assert u["parity"]
         assert (
@@ -155,7 +155,7 @@ def test_so3krates_training():
         n_layer=2,
         prop_keys=prop_keys,
         geometry_embed_kwargs={"degrees": [1, 2]},
-        so3krates_layer_kwargs={"n_heads": 1, "degrees": [1, 2]},
+        so3krates_layer_kwargs={"num_heads": 1, "degrees": [1, 2]},
     )
 
     obs_fn = get_obs_and_force_fn(net)

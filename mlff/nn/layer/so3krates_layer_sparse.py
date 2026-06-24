@@ -12,7 +12,7 @@ from mlff.sph_ops import make_l0_contraction_fn
 from mlff.masking import mask
 
 
-def split_in_heads(x: jnp.ndarray, num_heads: int) -> (Callable, jnp.ndarray):
+def split_in_heads(x: jnp.ndarray, num_heads: int) -> tuple[Callable, jnp.ndarray]:
     def inv_split(inputs):
         return inputs.reshape(*x.shape[:-1], -1)
 
@@ -217,10 +217,10 @@ class AttentionBlock(nn.Module):
         assert cut.ndim == 1
 
         num_features = x.shape[-1]
-        assert num_features % self.num_heads == 0
+        assert num_features % self.num_heads == 0, "The number of invariant features must be divisible by the number of attention heads to comply with euclidean self-attention requirements"
 
         # tot_num_heads = self.num_heads + len(self.degrees)
-        assert num_features % len(self.degrees) == 0
+        assert num_features % len(self.degrees) == 0, "The number of invariant features must be divisible by the spherical harmonics degree to comply with spherical self-attention requirements"
 
         # tot_num_features = tot_num_heads * self.num_features_head
 
