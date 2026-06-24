@@ -4,7 +4,7 @@ import jax
 
 from jax.ops import segment_sum
 from functools import partial
-from typing import (Any, Callable, Dict, Sequence)
+from typing import Any, Callable, Dict, Sequence
 from itertools import chain
 
 from mlff.nn.base.sub_module import BaseSubModule
@@ -22,10 +22,10 @@ class So3kratesLayer(BaseSubModule):
 
     degrees: Sequence[int]
 
-    fb_attention: str = 'conv_att'
-    gb_attention: str = 'conv_att'
-    fb_filter: str = 'radial_spherical'
-    gb_filter: str = 'radial_spherical'
+    fb_attention: str = "conv_att"
+    gb_attention: str = "conv_att"
+    fb_filter: str = "radial_spherical"
+    gb_filter: str = "radial_spherical"
 
     residual_mlp_1: bool = False
     residual_mlp_2: bool = False
@@ -35,37 +35,41 @@ class So3kratesLayer(BaseSubModule):
     final_layer: bool = False
     non_local_sphc: bool = False
     non_local_feature: bool = False
-    fast_attention_kwargs: Dict = None
-    chi_cut: float = None
+    fast_attention_kwargs: Dict | None = None
+    chi_cut: float | None = None
     chi_cut_dynamic: bool = False
     parity: bool = True
     layer_normalization: bool = False
     sphc_normalization: bool = False
     neighborhood_normalization: bool = False
-    module_name: str = 'so3krates_layer'
+    module_name: str = "so3krates_layer"
 
     def setup(self):
         self.chi_cut_fn = lambda y, *args, **kwargs: jnp.zeros(1)
 
         if self.chi_cut is not None or self.chi_cut_dynamic is True:
-            raise NotImplementedError('Improved version of non-local corrections will come soon. Stay tuned!')
+            raise NotImplementedError(
+                "Improved version of non-local corrections will come soon. Stay tuned!"
+            )
 
         if self.neighborhood_normalization is True:
-            raise DeprecationWarning('Neighborhood normalization is deprecated.')
+            raise DeprecationWarning("Neighborhood normalization is deprecated.")
 
     @nn.compact
-    def __call__(self,
-                 x: jnp.ndarray,
-                 chi: jnp.ndarray,
-                 rbf_ij: jnp.ndarray,
-                 sph_ij: jnp.ndarray,
-                 phi_r_cut: jnp.ndarray,
-                 idx_i: jnp.ndarray,
-                 idx_j: jnp.ndarray,
-                 pair_mask: jnp.ndarray,
-                 point_mask: jnp.ndarray,
-                 *args,
-                 **kwargs):
+    def __call__(
+        self,
+        x: jnp.ndarray,
+        chi: jnp.ndarray,
+        rbf_ij: jnp.ndarray,
+        sph_ij: jnp.ndarray,
+        phi_r_cut: jnp.ndarray,
+        idx_i: jnp.ndarray,
+        idx_j: jnp.ndarray,
+        pair_mask: jnp.ndarray,
+        point_mask: jnp.ndarray,
+        *args,
+        **kwargs,
+    ):
         """
 
         Args:
@@ -86,24 +90,30 @@ class So3kratesLayer(BaseSubModule):
         """
 
         num_features = x.shape[-1]
-        assert num_features % self.num_heads == 0, "The number of invariant features must be divisible by the number of attention heads to comply with euclidean self-attention requirements"
+        assert num_features % self.num_heads == 0, (
+            "The number of invariant features must be divisible by the number of attention heads to comply with euclidean self-attention requirements"
+        )
 
         # tot_num_heads = self.num_heads + len(self.degrees)
-        assert num_features % len(self.degrees) == 0, "The number of invariant features must be divisible by the spherical harmonics degree to comply with spherical self-attention requirements"
+        assert num_features % len(self.degrees) == 0, (
+            "The number of invariant features must be divisible by the spherical harmonics degree to comply with spherical self-attention requirements"
+        )
 
+        self.sow("record", "chi_in", chi)
 
-        self.sow('record', 'chi_in', chi)
-
-        chi_ij = safe_scale(jax.vmap(lambda i, j: chi[j] - chi[i])(idx_i, idx_j),
-                            scale=pair_mask[:, None])  # shape: (P,m_tot)
+        chi_ij = safe_scale(
+            jax.vmap(lambda i, j: chi[j] - chi[i])(idx_i, idx_j),
+            scale=pair_mask[:, None],
+        )  # shape: (P,m_tot)
 
         contraction_fn = make_l0_contraction_fn(self.degrees, dtype=chi.dtype)
         m_chi_ij = contraction_fn(chi_ij)  # shape: (P,|l|)
 
         if self.chi_cut_dynamic:
-            raise RuntimeError('You should not end up here. Please report to '
-                               'https://github.com/thorben-frank/mlff/issues'
-                               )
+            raise RuntimeError(
+                "You should not end up here. Please report to "
+                "https://github.com/thorben-frank/mlff/issues"
+            )
         else:
             phi_chi_cut = jnp.zeros_like(phi_r_cut, dtype=phi_r_cut.dtype)
 
@@ -113,42 +123,50 @@ class So3kratesLayer(BaseSubModule):
         else:
             x_pre_1 = x
 
-        x_local = FeatureBlock(filter=self.fb_filter,
-                               rad_filter_features=self.fb_rad_filter_features,
-                               sph_filter_features=self.fb_sph_filter_features,
-                               attention=self.fb_attention,
-                               num_heads=self.num_heads)(x=x_pre_1,
-                                                     rbf_ij=rbf_ij,
-                                                     d_chi_ij_l=m_chi_ij,
-                                                     phi_r_cut=phi_r_cut,
-                                                     idx_i=idx_i,
-                                                     idx_j=idx_j,
-                                                     pair_mask=pair_mask)  # shape: (n,F)
+        x_local = FeatureBlock(
+            filter=self.fb_filter,
+            rad_filter_features=self.fb_rad_filter_features,
+            sph_filter_features=self.fb_sph_filter_features,
+            attention=self.fb_attention,
+            num_heads=self.num_heads,
+        )(
+            x=x_pre_1,
+            rbf_ij=rbf_ij,
+            d_chi_ij_l=m_chi_ij,
+            phi_r_cut=phi_r_cut,
+            idx_i=idx_i,
+            idx_j=idx_j,
+            pair_mask=pair_mask,
+        )  # shape: (n,F)
 
-        chi_local = GeometricBlock(filter=self.gb_filter,
-                                   rad_filter_features=self.gb_rad_filter_features,
-                                   sph_filter_features=self.gb_sph_filter_features,
-                                   attention=self.gb_attention,
-                                   degrees=self.degrees)(chi=chi,
-                                                         sph_ij=sph_ij,
-                                                         x=x_pre_1,
-                                                         rbf_ij=rbf_ij,
-                                                         d_chi_ij_l=m_chi_ij,
-                                                         phi_r_cut=phi_r_cut,
-                                                         phi_chi_cut=phi_chi_cut,
-                                                         idx_i=idx_i,
-                                                         idx_j=idx_j,
-                                                         pair_mask=pair_mask)  # shape: (n,m_tot)
+        chi_local = GeometricBlock(
+            filter=self.gb_filter,
+            rad_filter_features=self.gb_rad_filter_features,
+            sph_filter_features=self.gb_sph_filter_features,
+            attention=self.gb_attention,
+            degrees=self.degrees,
+        )(
+            chi=chi,
+            sph_ij=sph_ij,
+            x=x_pre_1,
+            rbf_ij=rbf_ij,
+            d_chi_ij_l=m_chi_ij,
+            phi_r_cut=phi_r_cut,
+            phi_chi_cut=phi_chi_cut,
+            idx_i=idx_i,
+            idx_j=idx_j,
+            pair_mask=pair_mask,
+        )  # shape: (n,m_tot)
 
         if self.non_local_feature:
             raise NotImplementedError
         else:
-            x_non_local = jnp.float32(0.)
+            x_non_local = jnp.float32(0.0)
 
         if self.non_local_sphc:
             raise NotImplementedError
         else:
-            chi_non_local = jnp.float32(0.)
+            chi_non_local = jnp.float32(0.0)
 
         # add local and potential non local features and sphc, respectively and first skip connection
         x_skip_1 = x + x_local + x_non_local
@@ -159,17 +177,20 @@ class So3kratesLayer(BaseSubModule):
 
         # second pre layer-normalization
         if self.layer_normalization:
-            x_pre_2 = safe_mask(point_mask[:, None] != 0, fn=nn.LayerNorm(), operand=x_skip_1)
+            x_pre_2 = safe_mask(
+                point_mask[:, None] != 0, fn=nn.LayerNorm(), operand=x_skip_1
+            )
         else:
             x_pre_2 = x_skip_1
 
         # feature <-> sphc interaction layer
-        delta_x, delta_chi = InteractionBlock(self.degrees,
-                                              parity=self.parity)(x_pre_2, chi_skip_1, point_mask)
+        delta_x, delta_chi = InteractionBlock(self.degrees, parity=self.parity)(
+            x_pre_2, chi_skip_1, point_mask
+        )
 
         # second skip connection
-        x_skip_2 = (x_skip_1 + delta_x)
-        chi_skip_2 = (chi_skip_1 + delta_chi)
+        x_skip_2 = x_skip_1 + delta_x
+        chi_skip_2 = chi_skip_1 + delta_chi
 
         if self.residual_mlp_2:
             x_skip_2 = ResidualMLP()(x_skip_2)
@@ -177,39 +198,43 @@ class So3kratesLayer(BaseSubModule):
         # in the final layer apply post layer-normalization
         if self.final_layer:
             if self.layer_normalization:
-                x_skip_2 = safe_mask(point_mask[:, None] != 0, fn=nn.LayerNorm(), operand=x_skip_2)
+                x_skip_2 = safe_mask(
+                    point_mask[:, None] != 0, fn=nn.LayerNorm(), operand=x_skip_2
+                )
             else:
                 x_skip_2 = x_skip_2
 
-        self.sow('record', 'chi_out', chi_skip_2)
+        self.sow("record", "chi_out", chi_skip_2)
 
-        return {'x': x_skip_2, 'chi': chi_skip_2}
+        return {"x": x_skip_2, "chi": chi_skip_2}
 
     def __dict_repr__(self) -> Dict[str, Dict[str, Any]]:
-        return {self.module_name: {'fb_filter': self.fb_filter,
-                                   'fb_rad_filter_features': self.fb_rad_filter_features,
-                                   'fb_sph_filter_features': self.fb_sph_filter_features,
-                                   'fb_attention': self.fb_attention,
-                                   'gb_filter': self.gb_filter,
-                                   'gb_rad_filter_features': self.gb_rad_filter_features,
-                                   'gb_sph_filter_features': self.gb_sph_filter_features,
-                                   'gb_attention': self.gb_attention,
-                                   'num_heads': self.num_heads,
-                                   'residual_mlp_1': self.residual_mlp_1,
-                                   'residual_mlp_2': self.residual_mlp_2,
-                                   'non_local_sphc': self.non_local_sphc,
-                                   'non_local_feature': self.non_local_feature,
-                                   'fast_attention_kwargs': self.fast_attention_kwargs,
-                                   'chi_cut': self.chi_cut,
-                                   'chi_cut_dynamic': self.chi_cut_dynamic,
-                                   'degrees': self.degrees,
-                                   'parity': self.parity,
-                                   'layer_normalization': self.layer_normalization,
-                                   'sphc_normalization': self.sphc_normalization,
-                                   'neighborhood_normalization': self.neighborhood_normalization,
-                                   'final_layer': self.final_layer
-                                   }
-                }
+        return {
+            self.module_name: {
+                "fb_filter": self.fb_filter,
+                "fb_rad_filter_features": self.fb_rad_filter_features,
+                "fb_sph_filter_features": self.fb_sph_filter_features,
+                "fb_attention": self.fb_attention,
+                "gb_filter": self.gb_filter,
+                "gb_rad_filter_features": self.gb_rad_filter_features,
+                "gb_sph_filter_features": self.gb_sph_filter_features,
+                "gb_attention": self.gb_attention,
+                "num_heads": self.num_heads,
+                "residual_mlp_1": self.residual_mlp_1,
+                "residual_mlp_2": self.residual_mlp_2,
+                "non_local_sphc": self.non_local_sphc,
+                "non_local_feature": self.non_local_feature,
+                "fast_attention_kwargs": self.fast_attention_kwargs,
+                "chi_cut": self.chi_cut,
+                "chi_cut_dynamic": self.chi_cut_dynamic,
+                "degrees": self.degrees,
+                "parity": self.parity,
+                "layer_normalization": self.layer_normalization,
+                "sphc_normalization": self.sphc_normalization,
+                "neighborhood_normalization": self.neighborhood_normalization,
+                "final_layer": self.final_layer,
+            }
+        }
 
 
 class FeatureBlock(nn.Module):
@@ -220,16 +245,18 @@ class FeatureBlock(nn.Module):
     num_heads: int
 
     def setup(self):
-        if self.filter == 'radial':
-            self.filter_fn = InvariantFilter(num_heads=1,
-                                             features=self.rad_filter_features,
-                                             activation_fn=silu)
-        elif self.filter == 'radial_spherical':
-            self.filter_fn = RadialSphericalFilter(rad_num_heads=1,
-                                                   rad_features=self.rad_filter_features,
-                                                   sph_num_heads=1,
-                                                   sph_features=self.sph_filter_features,
-                                                   activation_fn=silu)
+        if self.filter == "radial":
+            self.filter_fn = InvariantFilter(
+                num_heads=1, features=self.rad_filter_features, activation_fn=silu
+            )
+        elif self.filter == "radial_spherical":
+            self.filter_fn = RadialSphericalFilter(
+                rad_num_heads=1,
+                rad_features=self.rad_filter_features,
+                sph_num_heads=1,
+                sph_features=self.sph_filter_features,
+                activation_fn=silu,
+            )
         else:
             msg = "Filter argument `{}` is not a valid value.".format(self.filter)
             raise ValueError(msg)
@@ -237,16 +264,18 @@ class FeatureBlock(nn.Module):
         self.attention_fn = ConvAttention(num_heads=self.num_heads)
 
     @nn.compact
-    def __call__(self,
-                 x: jnp.ndarray,
-                 rbf_ij: jnp.ndarray,
-                 d_chi_ij_l: jnp.ndarray,
-                 phi_r_cut: jnp.ndarray,
-                 idx_i: jnp.ndarray,
-                 idx_j: jnp.ndarray,
-                 pair_mask: jnp.ndarray,
-                 *args,
-                 **kwargs):
+    def __call__(
+        self,
+        x: jnp.ndarray,
+        rbf_ij: jnp.ndarray,
+        d_chi_ij_l: jnp.ndarray,
+        phi_r_cut: jnp.ndarray,
+        idx_i: jnp.ndarray,
+        idx_j: jnp.ndarray,
+        pair_mask: jnp.ndarray,
+        *args,
+        **kwargs,
+    ):
         """
 
         Args:
@@ -264,12 +293,14 @@ class FeatureBlock(nn.Module):
 
         """
         w_ij = self.filter_fn(rbf=rbf_ij, d_gamma=d_chi_ij_l)  # shape: (n_pairs,F)
-        x_ = self.attention_fn(x=x,
-                               w_ij=w_ij,
-                               phi_r_cut=phi_r_cut,
-                               idx_i=idx_i,
-                               idx_j=idx_j,
-                               pair_mask=pair_mask)  # shape: (n,F)
+        x_ = self.attention_fn(
+            x=x,
+            w_ij=w_ij,
+            phi_r_cut=phi_r_cut,
+            idx_i=idx_i,
+            idx_j=idx_j,
+            pair_mask=pair_mask,
+        )  # shape: (n,F)
         return x_
 
 
@@ -281,36 +312,42 @@ class GeometricBlock(nn.Module):
     attention: str  # TODO: depracated
 
     def setup(self):
-        if self.filter == 'radial':
-            self.filter_fn = InvariantFilter(num_heads=1,
-                                             features=self.rad_filter_features,
-                                             activation_fn=silu)
-        elif self.filter == 'radial_spherical':
-            self.filter_fn = RadialSphericalFilter(rad_num_heads=1,
-                                                   rad_features=self.rad_filter_features,
-                                                   sph_num_heads=1,
-                                                   sph_features=self.sph_filter_features,
-                                                   activation_fn=silu)
+        if self.filter == "radial":
+            self.filter_fn = InvariantFilter(
+                num_heads=1, features=self.rad_filter_features, activation_fn=silu
+            )
+        elif self.filter == "radial_spherical":
+            self.filter_fn = RadialSphericalFilter(
+                rad_num_heads=1,
+                rad_features=self.rad_filter_features,
+                sph_num_heads=1,
+                sph_features=self.sph_filter_features,
+                activation_fn=silu,
+            )
         else:
             msg = "Filter argument `{}` is not a valid value.".format(self.filter)
             raise ValueError(msg)
 
-        self.attention_fn = SphConvAttention(num_heads=len(self.degrees), harmonic_orders=self.degrees)
+        self.attention_fn = SphConvAttention(
+            num_heads=len(self.degrees), harmonic_orders=self.degrees
+        )
 
     @nn.compact
-    def __call__(self,
-                 chi: jnp.ndarray,
-                 sph_ij: jnp.ndarray,
-                 x: jnp.ndarray,
-                 rbf_ij: jnp.ndarray,
-                 d_chi_ij_l: jnp.ndarray,
-                 phi_r_cut: jnp.ndarray,
-                 phi_chi_cut: jnp.ndarray,
-                 idx_i: jnp.ndarray,
-                 idx_j: jnp.ndarray,
-                 pair_mask: jnp.ndarray,
-                 *args,
-                 **kwargs):
+    def __call__(
+        self,
+        chi: jnp.ndarray,
+        sph_ij: jnp.ndarray,
+        x: jnp.ndarray,
+        rbf_ij: jnp.ndarray,
+        d_chi_ij_l: jnp.ndarray,
+        phi_r_cut: jnp.ndarray,
+        phi_chi_cut: jnp.ndarray,
+        idx_i: jnp.ndarray,
+        idx_j: jnp.ndarray,
+        pair_mask: jnp.ndarray,
+        *args,
+        **kwargs,
+    ):
         """
 
         Args:
@@ -331,17 +368,20 @@ class GeometricBlock(nn.Module):
         Returns:
 
         """
-        w_ij = safe_scale(self.filter_fn(rbf=rbf_ij, d_gamma=d_chi_ij_l),
-                          scale=pair_mask[:, None])  # shape: (P,F)
-        chi_ = self.attention_fn(chi=chi,
-                                 sph_ij=sph_ij,
-                                 x=x,
-                                 w_ij=w_ij,
-                                 phi_r_cut=phi_r_cut,
-                                 phi_chi_cut=phi_chi_cut,
-                                 idx_i=idx_i,
-                                 idx_j=idx_j,
-                                 pair_mask=pair_mask)  # shape: (n,m_tot)
+        w_ij = safe_scale(
+            self.filter_fn(rbf=rbf_ij, d_gamma=d_chi_ij_l), scale=pair_mask[:, None]
+        )  # shape: (P,F)
+        chi_ = self.attention_fn(
+            chi=chi,
+            sph_ij=sph_ij,
+            x=x,
+            w_ij=w_ij,
+            phi_r_cut=phi_r_cut,
+            phi_chi_cut=phi_chi_cut,
+            idx_i=idx_i,
+            idx_j=idx_j,
+            pair_mask=pair_mask,
+        )  # shape: (n,m_tot)
         return chi_  # shape: (n,m_tot)
 
 
@@ -351,12 +391,25 @@ class InteractionBlock(nn.Module):
 
     def setup(self):
         segment_ids = jnp.array(
-            [y for y in chain(*[[n] * (2 * self.degrees[n] + 1) for n in range(len(self.degrees))])])
+            [
+                y
+                for y in chain(
+                    *[[n] * (2 * self.degrees[n] + 1) for n in range(len(self.degrees))]
+                )
+            ]
+        )
         num_segments = len(self.degrees)
-        self.v_segment_sum = jax.vmap(partial(segment_sum, segment_ids=segment_ids, num_segments=num_segments))
+        self.v_segment_sum = jax.vmap(
+            partial(segment_sum, segment_ids=segment_ids, num_segments=num_segments)
+        )
 
         _repeats = [2 * y + 1 for y in self.degrees]
-        self.repeat_fn = partial(jnp.repeat, repeats=jnp.array(_repeats), axis=-1, total_repeat_length=sum(_repeats))
+        self.repeat_fn = partial(
+            jnp.repeat,
+            repeats=jnp.array(_repeats),
+            axis=-1,
+            total_repeat_length=sum(_repeats),
+        )
 
         self.contraction_fn = make_l0_contraction_fn(degrees=self.degrees)
 
@@ -380,9 +433,11 @@ class InteractionBlock(nn.Module):
         d_chi = self.contraction_fn(chi)  # shape: (n,|l|)
 
         y = jnp.concatenate([x, d_chi], axis=-1)  # shape: (n,F+|l|)
-        a1, b1 = jnp.split(MLP(features=[int(F + nl)],
-                               activation_fn=silu)(y),
-                           indices_or_sections=[F], axis=-1)
+        a1, b1 = jnp.split(
+            MLP(features=[int(F + nl)], activation_fn=silu)(y),
+            indices_or_sections=[F],
+            axis=-1,
+        )
         # shape: (n,F) / shape: (n,n_l) / shape: (n,n_l)
         return a1, self.repeat_fn(b1) * chi
 
@@ -393,16 +448,20 @@ class InvariantFilter(nn.Module):
     activation_fn: Callable = silu
 
     def setup(self):
-        assert self.features[-1] % self.num_heads == 0, f"The number of invariant features ({self.features[-1]}) must be divisible by the number of attention heads ({self.num_heads})"
+        assert self.features[-1] % self.num_heads == 0, (
+            f"The number of invariant features ({self.features[-1]}) must be divisible by the number of attention heads ({self.num_heads})"
+        )
 
         f_out = int(self.features[-1] / self.num_heads)
         self._features = [*self.features[:-1], f_out]
-        self.filter_fn = nn.vmap(MLP,
-                                 in_axes=None, out_axes=-2,
-                                 axis_size=self.num_heads,
-                                 variable_axes={'params': 0},
-                                 split_rngs={'params': True}
-                                 )
+        self.filter_fn = nn.vmap(
+            MLP,
+            in_axes=None,
+            out_axes=-2,
+            axis_size=self.num_heads,
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+        )
 
     @nn.compact
     def __call__(self, rbf, *args, **kwargs):
@@ -417,7 +476,9 @@ class InvariantFilter(nn.Module):
         Returns: filter values, shape: (...,F)
 
         """
-        w = self.filter_fn(self._features, self.activation_fn)(rbf)  # shape: (...,num_heads,F_head)
+        w = self.filter_fn(self._features, self.activation_fn)(
+            rbf
+        )  # shape: (...,num_heads,F_head)
         w = w.reshape(*rbf.shape[:-1], -1)  # shape: (...,n,F)
         return w
 
@@ -430,8 +491,12 @@ class RadialSphericalFilter(nn.Module):
     activation_fn: Callable = silu
 
     def setup(self):
-        assert self.rad_features[-1] % self.rad_num_heads == 0, f"The number of radial features ({self.rad_features[-1]}) must be divisible by the number of radial attention heads ({self.rad_num_heads})"
-        assert self.sph_features[-1] % self.sph_num_heads == 0, f"The number of spherical features ({self.sph_features[-1]}) must be divisible by the number of spherical attention heads ({self.sph_num_heads})"
+        assert self.rad_features[-1] % self.rad_num_heads == 0, (
+            f"The number of radial features ({self.rad_features[-1]}) must be divisible by the number of radial attention heads ({self.rad_num_heads})"
+        )
+        assert self.sph_features[-1] % self.sph_num_heads == 0, (
+            f"The number of spherical features ({self.sph_features[-1]}) must be divisible by the number of spherical attention heads ({self.sph_num_heads})"
+        )
 
         f_out_rad = int(self.rad_features[-1] / self.rad_num_heads)
         f_out_sph = int(self.sph_features[-1] / self.sph_num_heads)
@@ -439,19 +504,23 @@ class RadialSphericalFilter(nn.Module):
         self._rad_features = [*self.rad_features[:-1], f_out_rad]
         self._sph_features = [*self.sph_features[:-1], f_out_sph]
 
-        self.rad_filter_fn = nn.vmap(MLP,
-                                     in_axes=None, out_axes=-2,
-                                     axis_size=self.rad_num_heads,
-                                     variable_axes={'params': 0},
-                                     split_rngs={'params': True}
-                                     )
+        self.rad_filter_fn = nn.vmap(
+            MLP,
+            in_axes=None,
+            out_axes=-2,
+            axis_size=self.rad_num_heads,
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+        )
 
-        self.sph_filter_fn = nn.vmap(MLP,
-                                     in_axes=None, out_axes=-2,
-                                     axis_size=self.sph_num_heads,
-                                     variable_axes={'params': 0},
-                                     split_rngs={'params': True}
-                                     )
+        self.sph_filter_fn = nn.vmap(
+            MLP,
+            in_axes=None,
+            out_axes=-2,
+            axis_size=self.sph_num_heads,
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+        )
 
     @nn.compact
     def __call__(self, rbf, d_gamma, *args, **kwargs):
@@ -467,8 +536,12 @@ class RadialSphericalFilter(nn.Module):
         Returns: filter values, shape: (...,F)
 
         """
-        w = self.rad_filter_fn(self._rad_features, self.activation_fn)(rbf)  # shape: (...,num_heads,F_head)
-        w += self.sph_filter_fn(self._sph_features, self.activation_fn)(d_gamma)  # shape: (...,num_heads,F_head)
+        w = self.rad_filter_fn(self._rad_features, self.activation_fn)(
+            rbf
+        )  # shape: (...,num_heads,F_head)
+        w += self.sph_filter_fn(self._sph_features, self.activation_fn)(
+            d_gamma
+        )  # shape: (...,num_heads,F_head)
         w = w.reshape(*rbf.shape[:-1], -1)  # shape: (...,n,n,F)
         return w
 
@@ -477,19 +550,23 @@ class ConvAttention(nn.Module):
     num_heads: int
 
     def setup(self):
-        self.coeff_fn = nn.vmap(ConvAttentionCoefficients,
-                                in_axes=(-2, -2, None, None), out_axes=-1,
-                                axis_size=self.num_heads,
-                                variable_axes={'params': 0},
-                                split_rngs={'params': True}
-                                )
+        self.coeff_fn = nn.vmap(
+            ConvAttentionCoefficients,
+            in_axes=(-2, -2, None, None),
+            out_axes=-1,
+            axis_size=self.num_heads,
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+        )
 
-        self.aggregate_fn = nn.vmap(AttentionAggregation,
-                                    in_axes=(-2, -1, None, None), out_axes=-2,
-                                    axis_size=self.num_heads,
-                                    variable_axes={'params': 0},
-                                    split_rngs={'params': True}
-                                    )
+        self.aggregate_fn = nn.vmap(
+            AttentionAggregation,
+            in_axes=(-2, -1, None, None),
+            out_axes=-2,
+            axis_size=self.num_heads,
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+        )
 
     @nn.compact
     def __call__(self, x, w_ij, phi_r_cut, idx_i, idx_j, pair_mask, *args, **kwargs):
@@ -503,17 +580,27 @@ class ConvAttention(nn.Module):
         Returns:
 
         """
-        inv_x_head_split, x_heads = equal_head_split(x, num_heads=self.num_heads)  # shape: (n,num_heads,F_head)
-        _, w_heads = equal_head_split(w_ij, num_heads=self.num_heads)  # shape: (n_pairs,num_heads,F_head)
-        alpha = self.coeff_fn()(x_heads, w_heads, idx_i, idx_j)  # shape: (n_pairs,num_heads)
-        alpha = safe_scale(alpha, scale=pair_mask[:, None] * phi_r_cut[:, None])  # shape: (n_pairs,num_heads)
+        inv_x_head_split, x_heads = equal_head_split(
+            x, num_heads=self.num_heads
+        )  # shape: (n,num_heads,F_head)
+        _, w_heads = equal_head_split(
+            w_ij, num_heads=self.num_heads
+        )  # shape: (n_pairs,num_heads,F_head)
+        alpha = self.coeff_fn()(
+            x_heads, w_heads, idx_i, idx_j
+        )  # shape: (n_pairs,num_heads)
+        alpha = safe_scale(
+            alpha, scale=pair_mask[:, None] * phi_r_cut[:, None]
+        )  # shape: (n_pairs,num_heads)
 
         # save attention values for later analysis
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        self.sow('record', 'alpha', alpha)
+        self.sow("record", "alpha", alpha)
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-        x_ = inv_x_head_split(self.aggregate_fn()(x_heads, alpha, idx_i, idx_j))  # shape: (n,F)
+        x_ = inv_x_head_split(
+            self.aggregate_fn()(x_heads, alpha, idx_i, idx_j)
+        )  # shape: (n,F)
         return x_
 
 
@@ -523,16 +610,36 @@ class SphConvAttention(nn.Module):
 
     def setup(self):
         _repeats = [2 * y + 1 for y in self.harmonic_orders]
-        self.repeat_fn = partial(jnp.repeat, repeats=jnp.array(_repeats), axis=-1, total_repeat_length=sum(_repeats))
-        self.coeff_fn = nn.vmap(ConvAttentionCoefficients,
-                                in_axes=(-2, -2, None, None), out_axes=-1,
-                                axis_size=self.num_heads,
-                                variable_axes={'params': 0},
-                                split_rngs={'params': True}
-                                )
+        self.repeat_fn = partial(
+            jnp.repeat,
+            repeats=jnp.array(_repeats),
+            axis=-1,
+            total_repeat_length=sum(_repeats),
+        )
+        self.coeff_fn = nn.vmap(
+            ConvAttentionCoefficients,
+            in_axes=(-2, -2, None, None),
+            out_axes=-1,
+            axis_size=self.num_heads,
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+        )
 
     @nn.compact
-    def __call__(self, chi, sph_ij, x, w_ij, phi_r_cut, phi_chi_cut, idx_i, idx_j, pair_mask, *args, **kwargs):
+    def __call__(
+        self,
+        chi,
+        sph_ij,
+        x,
+        w_ij,
+        phi_r_cut,
+        phi_chi_cut,
+        idx_i,
+        idx_j,
+        pair_mask,
+        *args,
+        **kwargs,
+    ):
         """
 
         Args:
@@ -554,22 +661,34 @@ class SphConvAttention(nn.Module):
         """
 
         # number of heads equals number of harmonics, i.e. num_heads = n_l
-        inv_x_head_split, x_heads = equal_head_split(x, num_heads=self.num_heads)  # shape: (n,num_heads,F_head)
-        _, w_ij_heads = equal_head_split(w_ij, num_heads=self.num_heads)  # shape: (n_pairs,num_heads,F_head)
-        alpha_ij = self.coeff_fn()(x_heads, w_ij_heads, idx_i, idx_j)  # shape: (n_pairs,num_heads)
-        alpha_r_ij = safe_scale(alpha_ij, scale=pair_mask[:, None] * phi_r_cut[:, None])  # shape: (n_pairs,num_heads)
-        alpha_s_ij = safe_scale(alpha_ij, scale=pair_mask[:, None] * phi_chi_cut[:, None])  # shape: (n_pairs,num_heads)
+        inv_x_head_split, x_heads = equal_head_split(
+            x, num_heads=self.num_heads
+        )  # shape: (n,num_heads,F_head)
+        _, w_ij_heads = equal_head_split(
+            w_ij, num_heads=self.num_heads
+        )  # shape: (n_pairs,num_heads,F_head)
+        alpha_ij = self.coeff_fn()(
+            x_heads, w_ij_heads, idx_i, idx_j
+        )  # shape: (n_pairs,num_heads)
+        alpha_r_ij = safe_scale(
+            alpha_ij, scale=pair_mask[:, None] * phi_r_cut[:, None]
+        )  # shape: (n_pairs,num_heads)
+        alpha_s_ij = safe_scale(
+            alpha_ij, scale=pair_mask[:, None] * phi_chi_cut[:, None]
+        )  # shape: (n_pairs,num_heads)
         alpha_ij = alpha_r_ij + alpha_s_ij  # shape: (n_pairs,num_heads)
 
         # save attention values for later analysis
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        self.sow('record', 'alpha_r', alpha_r_ij)
-        self.sow('record', 'alpha_s', alpha_s_ij)
-        self.sow('record', 'alpha', alpha_ij)
+        self.sow("record", "alpha_r", alpha_r_ij)
+        self.sow("record", "alpha_s", alpha_s_ij)
+        self.sow("record", "alpha", alpha_ij)
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
         alpha_ij = self.repeat_fn(alpha_ij)  # shape: (n_pairs,m_tot)
-        chi_ = segment_sum(alpha_ij * sph_ij, segment_ids=idx_i, num_segments=x.shape[0])  # shape: (n,m_tot)
+        chi_ = segment_sum(
+            alpha_ij * sph_ij, segment_ids=idx_i, num_segments=x.shape[0]
+        )  # shape: (n,m_tot)
         return chi_
 
 
@@ -596,10 +715,13 @@ class ConvAttentionCoefficients(nn.Module):
 
 class AttentionAggregation(nn.Module):
     @nn.compact
-    def __call__(self, x: jnp.ndarray,
-                 alpha_ij: jnp.ndarray,
-                 idx_i: jnp.ndarray,
-                 idx_j: jnp.ndarray) -> jnp.ndarray:
+    def __call__(
+        self,
+        x: jnp.ndarray,
+        alpha_ij: jnp.ndarray,
+        idx_i: jnp.ndarray,
+        idx_j: jnp.ndarray,
+    ) -> jnp.ndarray:
         """
 
         Args:
@@ -613,10 +735,12 @@ class AttentionAggregation(nn.Module):
         """
 
         v_j = nn.Dense(x.shape[-1], use_bias=False)(x)[idx_j]  # shape: (n_pairs,F)
-        return segment_sum(alpha_ij[:, None] * v_j, segment_ids=idx_i, num_segments=x.shape[0])  # shape: (n,F)
+        return segment_sum(
+            alpha_ij[:, None] * v_j, segment_ids=idx_i, num_segments=x.shape[0]
+        )  # shape: (n,F)
 
 
-def equal_head_split(x: jnp.ndarray, num_heads: int) -> (Callable, jnp.ndarray):
+def equal_head_split(x: jnp.ndarray, num_heads: int) -> tuple[Callable, jnp.ndarray]:
     def inv_split(inputs):
         return inputs.reshape(*x.shape[:-1], -1)
 

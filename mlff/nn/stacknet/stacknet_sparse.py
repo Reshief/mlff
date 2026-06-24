@@ -4,7 +4,7 @@ import json
 import os
 
 from pathlib import Path
-from typing import (Any, Callable, Dict, Sequence, Tuple)
+from typing import Any, Callable, Dict, Sequence
 
 from mlff.nn.layer import get_layer
 from mlff.nn.embed import get_embedding_module
@@ -19,7 +19,7 @@ class StackNetSparse(nn.Module):
     feature_embeddings: Sequence[Callable]
     layers: Sequence[Callable]
     observables: Sequence[Callable]
-    prop_keys: Dict
+    prop_keys: Dict | None
     return_representations_bool: bool = False
 
     def setup(self):
@@ -32,14 +32,12 @@ class StackNetSparse(nn.Module):
 
     @classmethod
     def create_from_ckpt_dir(cls, ckpt_dir: str):
-        h_path = Path(ckpt_dir).absolute().resolve() / 'hyperparameters.json'
+        h_path = Path(ckpt_dir).absolute().resolve() / "hyperparameters.json"
         stack_net = init_stack_net_sparse(read_json(h_path))
         return stack_net
 
     @nn.compact
-    def __call__(self,
-                 inputs,
-                 **kwargs) -> Dict[str, jnp.ndarray]:
+    def __call__(self, inputs, **kwargs) -> Dict[str, jnp.ndarray]:
         """
         Energy function of the NN.
 
@@ -64,17 +62,17 @@ class StackNetSparse(nn.Module):
         embeds = []
         for embed_fn in self.feature_embeddings:
             embeds += [embed_fn(quantities)]  # len: n_embeds, shape: (n,F)
-        x = jnp.stack(embeds, axis=-1).sum(axis=-1) / jnp.sqrt(len(embeds))  # shape: (n,F)
-        quantities.update({'x': x})
+        x = jnp.stack(embeds, axis=-1).sum(axis=-1) / jnp.sqrt(
+            len(embeds)
+        )  # shape: (n,F)
+        quantities.update({"x": x})
 
-        for (n, layer) in enumerate(self.layers):
+        for n, layer in enumerate(self.layers):
             updated_quantities = layer(**quantities)
             quantities.update(updated_quantities)
 
         if self.return_representations_bool:
-            return {
-                'atomic_representations': quantities['x']
-            }
+            return {"atomic_representations": quantities["x"]}
 
         observables = {}
         for o_fn in self.observables:
@@ -91,27 +89,33 @@ class StackNetSparse(nn.Module):
         observables = []
         for x in self.feature_embeddings:
             feature_embeddings += [x.__dict_repr__()]
-        for (n, x) in enumerate(self.layers):
+        for n, x in enumerate(self.layers):
             layers += [x.__dict_repr__()]
         for x in self.observables:
             observables += [x.__dict_repr__()]
 
-        return {'stack_net_sparse': {'geometry_embeddings': geometry_embeddings,
-                                     'feature_embeddings': feature_embeddings,
-                                     'layers': layers,
-                                     'observables': observables,
-                                     'prop_keys': self.prop_keys,
-                                     'n_layers': len(layers)}}
+        return {
+            "stack_net_sparse": {
+                "geometry_embeddings": geometry_embeddings,
+                "feature_embeddings": feature_embeddings,
+                "layers": layers,
+                "observables": observables,
+                "prop_keys": self.prop_keys,
+                "n_layers": len(layers),
+            }
+        }
 
-    def to_json(self, ckpt_dir, name='hyperparameters.json'):
+    def to_json(self, ckpt_dir, name="hyperparameters.json"):
         j = self.__dict_repr__()
-        with open(os.path.join(ckpt_dir, name), 'w', encoding='utf-8') as f:
+        with open(os.path.join(ckpt_dir, name), "w", encoding="utf-8") as f:
             json.dump(j, f, ensure_ascii=False, indent=4)
 
     def reset_prop_keys(self, prop_keys, sub_modules=True) -> None:
         self.prop_keys.update(prop_keys)
         if sub_modules:
-            all_modules = self.geometry_embeddings + self.feature_embeddings + self.observables
+            all_modules = (
+                self.geometry_embeddings + self.feature_embeddings + self.observables
+            )
             for m in all_modules:
                 m.reset_prop_keys(prop_keys=prop_keys)
 
@@ -125,16 +129,21 @@ class StackNetSparse(nn.Module):
 
 
 def init_stack_net_sparse(h) -> StackNetSparse:
-    _h = h['stack_net_sparse']
-    geom_embs = [get_embedding_module(*tuple(x.items())[0]) for x in _h['geometry_embeddings']]
-    feature_embs = [get_embedding_module(*tuple(x.items())[0]) for x in _h['feature_embeddings']]
-    lays = [get_layer(*tuple(x.items())[0]) for x in _h['layers']]
-    obs = [get_observable_module(*tuple(x.items())[0]) for x in _h['observables']]
+    _h = h["stack_net_sparse"]
+    geom_embs = [
+        get_embedding_module(*tuple(x.items())[0]) for x in _h["geometry_embeddings"]
+    ]
+    feature_embs = [
+        get_embedding_module(*tuple(x.items())[0]) for x in _h["feature_embeddings"]
+    ]
+    lays = [get_layer(*tuple(x.items())[0]) for x in _h["layers"]]
+    obs = [get_observable_module(*tuple(x.items())[0]) for x in _h["observables"]]
     return StackNetSparse(
-        **{'geometry_embeddings': geom_embs,
-           'feature_embeddings': feature_embs,
-           'layers': lays,
-           'observables': obs,
-           'prop_keys': _h['prop_keys']
-           }
+        **{
+            "geometry_embeddings": geom_embs,
+            "feature_embeddings": feature_embs,
+            "layers": lays,
+            "observables": obs,
+            "prop_keys": _h["prop_keys"],
+        }
     )

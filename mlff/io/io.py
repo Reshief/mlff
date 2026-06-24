@@ -1,10 +1,10 @@
 import os
 import pathlib
 import json
-from typing import (Dict, Sequence)
+from typing import Dict, Sequence
 
 
-def read_json(path: str) -> Dict:
+def read_json(path: str | pathlib.Path) -> Dict:
     """
     Read a JSON file from path.
 
@@ -21,7 +21,7 @@ def read_json(path: str) -> Dict:
 
 def _uniquify(path):
     """
-    Uniquify `path`, i.e. if `path` exists try to create `path_1`. If this exist try to create `path_2` and so on ...
+    Uniquify `path`, i.e. if `path` exists try to create `path_1`. If this exists try to create `path_2` and so on ...
 
     Args:
         path (str): Directory.
@@ -75,7 +75,7 @@ def save_dict(path, filename, data, exists_ok=False) -> None:
     """
     path = create_directory(path, exists_ok=exists_ok)
     save_path = os.path.join(path, filename)
-    with open(save_path, 'w') as f:
+    with open(save_path, "w") as f:
         json.dump(data, f)
 
 
