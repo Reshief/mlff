@@ -4,7 +4,7 @@ import numpy as np
 import logging
 
 from tqdm import tqdm
-from typing import Any, Callable, Union
+from typing import Any, Callable
 
 Array = Any
 
