@@ -62,7 +62,7 @@ class So3kratesLayer(BaseSubModule):
         x: Float[jnp.ndarray, "node feature"],
         ev: Float[jnp.ndarray, "node sphc_feature"],
         rbf_ij: Float[jnp.ndarray, "pair K"],
-        ylm_ij: Float[jnp.ndarray, "pair order"],
+        ylm_ij: Float[jnp.ndarray, "pair sphc_feature"],
         cut: Float[jnp.ndarray, "pair"],
         idx_i: Int[jnp.ndarray, "pair"],
         idx_j: Int[jnp.ndarray, "pair"],
@@ -269,11 +269,11 @@ class FeatureBlock(nn.Module):
         self,
         x: Float[jnp.ndarray, "node feature"],
         rbf_ij: Float[jnp.ndarray, "pair K"],
-        d_ev_ij_l: Float[jnp.ndarray, "pair l"],
+        d_ev_ij_l: Float[jnp.ndarray, "pair L"],
         cut: Float[jnp.ndarray, "pair"],
         idx_i: Int[jnp.ndarray, "pair"],
         idx_j: Int[jnp.ndarray, "pair"],
-        pair_mask: jnp.ndarray,
+        pair_mask: Bool[jnp.ndarray, "pair"],
         *args,
         **kwargs,
     ):
@@ -336,16 +336,16 @@ class GeometricBlock(nn.Module):
     @nn.compact
     def __call__(
         self,
-        ev: jnp.ndarray,
-        ylm_ij: jnp.ndarray,
-        x: jnp.ndarray,
-        rbf_ij: jnp.ndarray,
-        d_ev_ij_l: jnp.ndarray,
-        cut: jnp.ndarray,
-        phi_ev_cut: jnp.ndarray,
-        idx_i: jnp.ndarray,
-        idx_j: jnp.ndarray,
-        pair_mask: jnp.ndarray,
+        x: Float[jnp.ndarray, "node feature"],
+        ev: Float[jnp.ndarray, "node sphc_feature"],
+        rbf_ij: Float[jnp.ndarray, "pair K"],
+        ylm_ij: Float[jnp.ndarray, "pair sphc_feature"],
+        d_ev_ij_l: Float[jnp.ndarray, "pair L"],
+        phi_ev_cut: Float[jnp.ndarray, "pair L"],
+        cut: Float[jnp.ndarray, "pair"],
+        idx_i: Int[jnp.ndarray, "pair"],
+        idx_j: Int[jnp.ndarray, "pair"],
+        pair_mask: Bool[jnp.ndarray, "pair"],
         *args,
         **kwargs,
     ):
@@ -415,7 +415,14 @@ class InteractionBlock(nn.Module):
         self.contraction_fn = make_l0_contraction_fn(degrees=self.degrees)
 
     @nn.compact
-    def __call__(self, x, ev, point_mask, *args, **kwargs):
+    def __call__(
+        self,
+        x: Float[jnp.ndarray, "node feature"],
+        ev: Float[jnp.ndarray, "node sphc_feature"],
+        point_mask: Bool[jnp.ndarray, "node"],
+        *args,
+        **kwargs,
+    ):
         """
 
         Args:
@@ -465,7 +472,21 @@ class InvariantFilter(nn.Module):
         )
 
     @nn.compact
-    def __call__(self, rbf, *args, **kwargs):
+    def __call__(
+        self,
+        x: Float[jnp.ndarray, "node feature"],
+        ev: Float[jnp.ndarray, "node sphc_feature"],
+        rbf_ij: Float[jnp.ndarray, "pair K"],
+        ylm_ij: Float[jnp.ndarray, "pair order"],
+        cut: Float[jnp.ndarray, "pair"],
+        idx_i: Int[jnp.ndarray, "pair"],
+        idx_j: Int[jnp.ndarray, "pair"],
+        pair_mask: Bool[jnp.ndarray, "pair"],
+        point_mask: Bool[jnp.ndarray, "node"],
+        rbf,
+        *args,
+        **kwargs,
+    ):
         """
         Filter build from invariant geometric features.
 
@@ -524,7 +545,13 @@ class RadialSphericalFilter(nn.Module):
         )
 
     @nn.compact
-    def __call__(self, rbf, d_gamma, *args, **kwargs):
+    def __call__(
+        self,
+        rbf_ij: Float[jnp.ndarray, "pair K"],
+        d_ev_ij_l: Float[jnp.ndarray, "pair L"],
+        *args,
+        **kwargs,
+    ):
         """
         Filter build from invariant geometric features.
 
@@ -538,12 +565,12 @@ class RadialSphericalFilter(nn.Module):
 
         """
         w = self.rad_filter_fn(self._rad_features, self.activation_fn)(
-            rbf
+            rbf_ij
         )  # shape: (...,num_heads,F_head)
         w += self.sph_filter_fn(self._sph_features, self.activation_fn)(
-            d_gamma
+            d_ev_ij_l
         )  # shape: (...,num_heads,F_head)
-        w = w.reshape(*rbf.shape[:-1], -1)  # shape: (...,n,n,F)
+        w = w.reshape(*rbf_ij.shape[:-1], -1)  # shape: (...,n,n,F)
         return w
 
 
@@ -570,7 +597,17 @@ class ConvAttention(nn.Module):
         )
 
     @nn.compact
-    def __call__(self, x, w_ij, cut, idx_i, idx_j, pair_mask, *args, **kwargs):
+    def __call__(
+        self,
+        x: Float[jnp.ndarray, "node feature"],
+        w_ij: Float[jnp.ndarray, "pair feature"],
+        cut: Float[jnp.ndarray, "pair"],
+        idx_i: Int[jnp.ndarray, "pair"],
+        idx_j: Int[jnp.ndarray, "pair"],
+        pair_mask: Bool[jnp.ndarray, "pair"],
+        *args,
+        **kwargs,
+    ):
         """
 
         Args:
@@ -588,7 +625,7 @@ class ConvAttention(nn.Module):
             w_ij, num_heads=self.num_heads
         )  # shape: (n_pairs,num_heads,F_head)
         alpha = self.coeff_fn()(
-            x_heads, w_heads, idx_i, idx_j
+            x_heads, w_heads, idx_i, idx_j, pair_mask=pair_mask
         )  # shape: (n_pairs,num_heads)
         alpha = safe_scale(
             alpha, scale=pair_mask[:, None] * cut[:, None]
@@ -600,7 +637,7 @@ class ConvAttention(nn.Module):
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
         x_ = inv_x_head_split(
-            self.aggregate_fn()(x_heads, alpha, idx_i, idx_j)
+            self.aggregate_fn()(x_heads, alpha, idx_i, idx_j, pair_mask=pair_mask)
         )  # shape: (n,F)
         return x_
 
@@ -629,15 +666,15 @@ class SphConvAttention(nn.Module):
     @nn.compact
     def __call__(
         self,
-        ev,
-        ylm_ij,
-        x,
-        w_ij,
-        cut,
-        phi_ev_cut,
-        idx_i,
-        idx_j,
-        pair_mask,
+        x: Float[jnp.ndarray, "node feature"],
+        ev: Float[jnp.ndarray, "node sphc_feature"],
+        ylm_ij: Float[jnp.ndarray, "pair sphc_feature"],
+        w_ij: Float[jnp.ndarray, "pair feature"],
+        cut: Float[jnp.ndarray, "pair"],
+        phi_ev_cut: Float[jnp.ndarray, "pair L"],
+        idx_i: Int[jnp.ndarray, "pair"],
+        idx_j: Int[jnp.ndarray, "pair"],
+        pair_mask: Bool[jnp.ndarray, "pair"],
         *args,
         **kwargs,
     ):
@@ -669,7 +706,7 @@ class SphConvAttention(nn.Module):
             w_ij, num_heads=self.num_heads
         )  # shape: (n_pairs,num_heads,F_head)
         alpha_ij = self.coeff_fn()(
-            x_heads, w_ij_heads, idx_i, idx_j
+            x_heads, w_ij_heads, idx_i, idx_j, pair_mask=pair_mask
         )  # shape: (n_pairs,num_heads)
         alpha_r_ij = safe_scale(
             alpha_ij, scale=pair_mask[:, None] * cut[:, None]
@@ -695,7 +732,14 @@ class SphConvAttention(nn.Module):
 
 class ConvAttentionCoefficients(nn.Module):
     @nn.compact
-    def __call__(self, x, w_ij, idx_i, idx_j):
+    def __call__(
+        self,
+        x: Float[jnp.ndarray, "node feature"],
+        w_ij: Float[jnp.ndarray, "pair feature"],
+        idx_i: Int[jnp.ndarray, "pair"],
+        idx_j: Int[jnp.ndarray, "pair"],
+        pair_mask: Bool[jnp.ndarray, "pair"],
+    ):
         """
 
         Args:
@@ -718,10 +762,11 @@ class AttentionAggregation(nn.Module):
     @nn.compact
     def __call__(
         self,
-        x: jnp.ndarray,
-        alpha_ij: jnp.ndarray,
-        idx_i: jnp.ndarray,
-        idx_j: jnp.ndarray,
+        x: Float[jnp.ndarray, "node feature"],
+        alpha_ij: Float[jnp.ndarray, "pair"],
+        idx_i: Int[jnp.ndarray, "pair"],
+        idx_j: Int[jnp.ndarray, "pair"],
+        pair_mask: Bool[jnp.ndarray, "pair"],
     ) -> jnp.ndarray:
         """
 
