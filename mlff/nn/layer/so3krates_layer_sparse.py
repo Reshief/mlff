@@ -6,6 +6,7 @@ import numpy as np
 from jax.ops import segment_sum
 from functools import partial
 from typing import Any, Callable, Dict, Sequence
+from jaxtyping import Float, Int
 
 from mlff.nn.base.sub_module import BaseSubModule
 from mlff.sph_ops import make_l0_contraction_fn
@@ -56,18 +57,21 @@ class SO3kratesLayerSparse(BaseSubModule):
                 )
 
     @nn.compact
+
     def __call__(
         self,
-        x: jnp.ndarray,
-        ev: jnp.ndarray,
-        rbf_ij: jnp.ndarray,
-        ylm_ij: jnp.ndarray,
-        cut: jnp.ndarray,
-        idx_i: jnp.ndarray,
-        idx_j: jnp.ndarray,
+        x: Float[jnp.ndarray, "node feature"],
+        ev: Float[jnp.ndarray, "node sphc_feature"],
+        rbf_ij: Float[jnp.ndarray, "pair K"],
+        ylm_ij: Float[jnp.ndarray, "pair order"],
+        cut: Float[jnp.ndarray, "pair"],
+        idx_i: Int[jnp.ndarray, "pair"],
+        idx_j: Int[jnp.ndarray, "pair"],
         *args,
         **kwargs,
-    ):
+    ) -> tuple[
+        Float[jnp.ndarray, "node feature"], Float[jnp.ndarray, "node sphc_feature"]
+    ]:
         """
 
         Args:
@@ -198,16 +202,18 @@ class AttentionBlock(nn.Module):
     @nn.compact
     def __call__(
         self,
-        x: jnp.ndarray,
-        ev: jnp.ndarray,
-        rbf_ij: jnp.ndarray,
-        ylm_ij: jnp.ndarray,
-        cut: jnp.ndarray,
-        idx_i: jnp.ndarray,
-        idx_j: jnp.ndarray,
+        x: Float[jnp.ndarray, "node feature"],
+        ev: Float[jnp.ndarray, "node sphc_feature"],
+        rbf_ij: Float[jnp.ndarray, "pair K"],
+        ylm_ij: Float[jnp.ndarray, "pair order"],
+        cut: Float[jnp.ndarray, "pair"],
+        idx_i: Int[jnp.ndarray, "pair"],
+        idx_j: Int[jnp.ndarray, "pair"],
         *args,
         **kwargs,
-    ):
+    ) -> tuple[
+        Float[jnp.ndarray, "node feature"], Float[jnp.ndarray, "node sphc_feature"]
+    ]:
         """
 
         Args:
@@ -404,7 +410,16 @@ class ExchangeBlock(nn.Module):
             self.last_layer_kernel_init = jax.nn.initializers.lecun_normal()
 
     @nn.compact
-    def __call__(self, x, ev, *args, **kwargs):
+
+    def __call__(
+        self,
+        x: Float[jnp.ndarray, "node feature"],
+        ev: Float[jnp.ndarray, "node sphc_feature"],
+        *args,
+        **kwargs,
+    ) -> tuple[
+        Float[jnp.ndarray, "node feature"], Float[jnp.ndarray, "node sphc_feature"]
+    ]:
         """
 
         Args:

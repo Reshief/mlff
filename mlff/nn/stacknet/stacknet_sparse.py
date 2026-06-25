@@ -4,8 +4,11 @@ import json
 import os
 
 from pathlib import Path
-from typing import Any, Callable, Dict, Sequence
+from typing import Any
+from jaxtyping import Float, Int
 
+
+from mlff.nn.base.sub_module import BaseSubModule
 from mlff.nn.layer import get_layer
 from mlff.nn.embed import get_embedding_module
 from mlff.nn.observable import get_observable_module
@@ -15,11 +18,11 @@ Array = Any
 
 
 class StackNetSparse(nn.Module):
-    geometry_embeddings: Sequence[Callable]
-    feature_embeddings: Sequence[Callable]
-    layers: Sequence[Callable]
-    observables: Sequence[Callable]
-    prop_keys: Dict | None
+    geometry_embeddings: list[BaseSubModule]
+    feature_embeddings: list[BaseSubModule]
+    layers: list[BaseSubModule]
+    observables: list[BaseSubModule]
+    prop_keys: dict[str, str] | None
     return_representations_bool: bool = False
 
     def setup(self):
@@ -37,14 +40,18 @@ class StackNetSparse(nn.Module):
         return stack_net
 
     @nn.compact
-    def __call__(self, inputs, **kwargs) -> Dict[str, jnp.ndarray]:
+    def __call__(
+        self,
+        inputs: dict[str, Float[jnp.ndarray, "..."] | Int[jnp.ndarray, "..."]],
+        **kwargs,
+    ) -> dict[str, jnp.ndarray]:
         """
         Energy function of the NN.
 
         Args:
-            inputs (Dict):
+            inputs (dict):
             args (Tuple):
-            kwargs (Dict):
+            kwargs (dict):
 
         Returns: energy, shape: (1)
 
@@ -105,13 +112,28 @@ class StackNetSparse(nn.Module):
             }
         }
 
-    def to_json(self, ckpt_dir, name="hyperparameters.json"):
+    def to_json(self, ckpt_dir, name: str = "hyperparameters.json"):
         j = self.__dict_repr__()
         with open(os.path.join(ckpt_dir, name), "w", encoding="utf-8") as f:
             json.dump(j, f, ensure_ascii=False, indent=4)
 
-    def reset_prop_keys(self, prop_keys, sub_modules=True) -> None:
-        self.prop_keys.update(prop_keys)
+    def reset_prop_keys(
+        self, prop_keys: dict[str, str], sub_modules: bool = True
+    ) -> None:
+        """Method to update the registered mapping between data-specific and general property key values.
+
+        Parameters
+        ----------
+        prop_keys : dict[str, str]
+            The new mappings between relevant properties and dataset specific keys
+        sub_modules : bool, optional
+            A flag to propagate the update to all submodules, by default True
+        """
+        if self.prop_keys is None:
+            self.prop_keys = prop_keys
+        else:
+            self.prop_keys.update(prop_keys)
+
         if sub_modules:
             all_modules = (
                 self.geometry_embeddings + self.feature_embeddings + self.observables
@@ -128,7 +150,19 @@ class StackNetSparse(nn.Module):
             o.reset_output_convention(output_convention=output_convention)
 
 
-def init_stack_net_sparse(h) -> StackNetSparse:
+def init_stack_net_sparse(h: dict[str, Any]) -> StackNetSparse:
+    """Initialize a StackNetSparse instance from a stored hyperparameter configuration
+
+    Parameters
+    ----------
+    h : dict[str, Any]
+        The stored configuration of the stacknet instance
+
+    Returns
+    -------
+    StackNetSparse
+        A deserialized StackNetSparse instance adhering to the configuration
+    """
     _h = h["stack_net_sparse"]
     geom_embs = [
         get_embedding_module(*tuple(x.items())[0]) for x in _h["geometry_embeddings"]
