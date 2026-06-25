@@ -5,7 +5,7 @@ import os
 
 from pathlib import Path
 from typing import Any
-from jaxtyping import Float, Int
+from jaxtyping import Float, Int, Bool
 
 
 from mlff.nn.base.sub_module import BaseSubModule
@@ -42,7 +42,12 @@ class StackNetSparse(nn.Module):
     @nn.compact
     def __call__(
         self,
-        inputs: dict[str, Float[jnp.ndarray, "..."] | Int[jnp.ndarray, "..."]],
+        inputs: dict[
+            str,
+            Float[jnp.ndarray, "..."]
+            | Int[jnp.ndarray, "..."]
+            | Bool[jnp.ndarray, "..."],
+        ],
         **kwargs,
     ) -> dict[str, jnp.ndarray]:
         """
