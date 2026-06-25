@@ -2,9 +2,6 @@ from typing import Any, Callable
 
 import optax
 
-from optax import exponential_decay
-from optax import constant_schedule
-
 from flax import traverse_util
 from flax.core.frozen_dict import freeze, unfreeze
 
