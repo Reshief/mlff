@@ -28,7 +28,6 @@ class GeometryEmbedE3x(BaseSubModule):
     module_name: str = "geometry_embed_e3x"
 
     def __call__(self, inputs, *args, **kwargs):
-
         idx_i = inputs["idx_i"]  # shape: (num_pairs)
         idx_j = inputs["idx_j"]  # shape: (num_pairs)
         idx_i_lr = inputs.get("idx_i_lr")  # shape: (num_pairs_lr)
