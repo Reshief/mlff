@@ -1,3 +1,4 @@
+from mlff.nn.base.sub_module import BaseSubModule
 from mlff.nn.embed import AtomTypeEmbedSparse, ChargeEmbedSparse, SpinEmbedSparse
 
 
@@ -5,7 +6,7 @@ def make_embedding_modules(
         num_features: int,
         use_charge_embed: bool,
         use_spin_embed: bool
-):
+) -> list[BaseSubModule]:
     embedding_modules = []
     atom_type_embed = AtomTypeEmbedSparse(
         num_features=num_features,

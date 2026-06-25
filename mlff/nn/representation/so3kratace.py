@@ -1,8 +1,9 @@
 import flax.linen as nn
 import logging
 
-from typing import (Dict, Sequence)
+from typing import (Any, Sequence)
 
+from mlff.nn.base.sub_module import BaseSubModule
 from mlff.nn.stacknet import StackNet
 from mlff.nn.layer.so3kratace_layer import So3krataceLayer
 from mlff.nn.observable import Energy
@@ -11,14 +12,14 @@ from mlff.nn.embed import AtomTypeEmbed, GeometryEmbed, OneHotEmbed
 # logging.basicConfig(level=logging.INFO)
 
 
-def init_so3kratace(prop_keys: Dict[str, str],
+def init_so3kratace(prop_keys: dict[str, str],
                     atomic_types: Sequence[int],
                     F: int = 132,
                     n_layer: int = 2,
-                    embeddings: Sequence[nn.Module] = None,
-                    obs: Sequence[nn.Module] = None,
-                    so3kratace_layer_kwargs: Dict = None,
-                    geometry_embed_kwargs: Dict = None):
+                    embeddings: Sequence[BaseSubModule] | None = None,
+                    obs: Sequence[BaseSubModule] | None = None,
+                    so3kratace_layer_kwargs: dict[str,Any]  | None = None,
+                    geometry_embed_kwargs: dict[str,Any] | None = None):
 
     layer_arguments = _default_layer_arguments(F=F, n_node_type=len(atomic_types))
 

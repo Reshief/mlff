@@ -18,7 +18,7 @@ from mlff.basis_function.spherical import init_sph_fn
 
 
 class GeometryEmbedE3x(BaseSubModule):
-    prop_keys: Dict
+    prop_keys: dict[str, str] | None
     max_degree: int
     radial_basis_fn: str
     num_radial_basis_fn: int
@@ -140,7 +140,7 @@ class GeometryEmbedE3x(BaseSubModule):
 
 
 class GeometryEmbedSparse(BaseSubModule):
-    prop_keys: Dict | None
+    prop_keys: dict[str, str] | None
     degrees: Sequence[int]
     radial_basis_fn: str
     num_radial_basis_fn: int
@@ -160,12 +160,12 @@ class GeometryEmbedSparse(BaseSubModule):
             getattr(utils.cutoff_fn, self.cutoff_fn), r_cut=self.cutoff
         )
 
-    def __call__(self, inputs: Dict):
+    def __call__(self, inputs: dict):
         """
         Embed geometric information from the atomic positions and its neighboring atoms.
 
         Args:
-            inputs (Dict): Input dictionary, with key - entry pairs:
+            inputs (dict): Input dictionary, with key - entry pairs:
                 positions (Array): Atomic positions, (N, 3)
                 idx_i (Array): Index centering atom, (num_pairs)
                 idx_j (Array): Index neighboring atom, (num_pairs)
@@ -304,20 +304,20 @@ class GeometryEmbedSparse(BaseSubModule):
 
 class AtomTypeEmbedSparse(BaseSubModule):
     num_features: int
-    prop_keys: Dict
+    prop_keys: dict[str, str] | None
     zmax: int = 118
     module_name: str = "atom_type_embed_sparse"
 
     @nn.compact
-    def __call__(self, inputs: Dict, *args, **kwargs) -> jnp.ndarray:
+    def __call__(self, inputs: dict, *args, **kwargs) -> jnp.ndarray:
         """
         Create atomic embeddings based on the atomic types.
 
         Args:
-            inputs (Dict):
+            inputs (dict):
                 atomic_numbers (Array): atomic types, shape: (num_nodes)
             *args (Tuple):
-            **kwargs (Dict):
+            **kwargs (dict):
 
         Returns: Atomic embeddings, shape: (num_nodes,num_features)
 
@@ -407,18 +407,18 @@ class ChargeSpinEmbedSparse(nn.Module):
 
 
 class ChargeEmbedSparse(BaseSubModule):
-    prop_keys: Dict
+    prop_keys: dict[str, str] | None
     num_features: int
     activation_fn: str = "silu"
     zmax: int = 118
     module_name: str = "charge_embed_sparse"
 
     @nn.compact
-    def __call__(self, inputs: Dict, *args, **kwargs):
+    def __call__(self, inputs: dict, *args, **kwargs):
         """
 
         Args:
-           inputs (Dict):
+           inputs (dict):
                 atomic_numbers (Array): atomic types, shape: (N)
                 total_charge (Array): total charge, shape: (num_graphs)
                 graph_mask (Array): (num_graphs)
@@ -461,18 +461,18 @@ class ChargeEmbedSparse(BaseSubModule):
 
 
 class SpinEmbedSparse(BaseSubModule):
-    prop_keys: Dict
+    prop_keys: dict[str, str] | None
     num_features: int
     activation_fn: str = "silu"
     zmax: int = 118
     module_name: str = "spin_embed_sparse"
 
     @nn.compact
-    def __call__(self, inputs: Dict, *args, **kwargs):
+    def __call__(self, inputs: dict, *args, **kwargs):
         """
 
         Args:
-           inputs (Dict):
+           inputs (dict):
                 atomic_numbers (Array): atomic types, shape: (N)
                 num_unpaired_electrons (Array): total charge, shape: (num_graphs)
                 graph_mask (Array): (num_graphs)
