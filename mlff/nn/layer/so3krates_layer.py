@@ -267,12 +267,12 @@ class FeatureBlock(nn.Module):
     @nn.compact
     def __call__(
         self,
-        x: jnp.ndarray,
-        rbf_ij: jnp.ndarray,
-        d_ev_ij_l: jnp.ndarray,
-        cut: jnp.ndarray,
-        idx_i: jnp.ndarray,
-        idx_j: jnp.ndarray,
+        x: Float[jnp.ndarray, "node feature"],
+        rbf_ij: Float[jnp.ndarray, "pair K"],
+        d_ev_ij_l: Float[jnp.ndarray, "pair l"],
+        cut: Float[jnp.ndarray, "pair"],
+        idx_i: Int[jnp.ndarray, "pair"],
+        idx_j: Int[jnp.ndarray, "pair"],
         pair_mask: jnp.ndarray,
         *args,
         **kwargs,
