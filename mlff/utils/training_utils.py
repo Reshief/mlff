@@ -1103,7 +1103,7 @@ def make_optimizer(
         gradient_clipping: str = 'identity',
         gradient_clipping_args: Dict = dict(),
         num_of_nans_to_ignore: int = 0
-):
+) -> optax.GradientTransformationExtraArgs:
     """Make optax optimizer.
 
     Args:
