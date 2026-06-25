@@ -57,20 +57,20 @@ class SO3kratesLayerSparse(BaseSubModule):
                 )
 
     @nn.compact
-
     def __call__(
         self,
         x: Float[jnp.ndarray, "node feature"],
         ev: Float[jnp.ndarray, "node sphc_feature"],
         rbf_ij: Float[jnp.ndarray, "pair K"],
-        ylm_ij: Float[jnp.ndarray, "pair order"],
+        ylm_ij: Float[jnp.ndarray, "pair sphc_feature"],
         cut: Float[jnp.ndarray, "pair"],
         idx_i: Int[jnp.ndarray, "pair"],
         idx_j: Int[jnp.ndarray, "pair"],
         *args,
         **kwargs,
-    ) -> tuple[
-        Float[jnp.ndarray, "node feature"], Float[jnp.ndarray, "node sphc_feature"]
+    ) -> dict[
+        str,
+        Float[jnp.ndarray, "node feature"] | Float[jnp.ndarray, "node sphc_feature"],
     ]:
         """
 
@@ -205,7 +205,7 @@ class AttentionBlock(nn.Module):
         x: Float[jnp.ndarray, "node feature"],
         ev: Float[jnp.ndarray, "node sphc_feature"],
         rbf_ij: Float[jnp.ndarray, "pair K"],
-        ylm_ij: Float[jnp.ndarray, "pair order"],
+        ylm_ij: Float[jnp.ndarray, "pair sphc_feature"],
         cut: Float[jnp.ndarray, "pair"],
         idx_i: Int[jnp.ndarray, "pair"],
         idx_j: Int[jnp.ndarray, "pair"],
@@ -410,7 +410,6 @@ class ExchangeBlock(nn.Module):
             self.last_layer_kernel_init = jax.nn.initializers.lecun_normal()
 
     @nn.compact
-
     def __call__(
         self,
         x: Float[jnp.ndarray, "node feature"],
