@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 import flax.linen as nn
 import jax
+from jaxtyping import Float, Int, Bool
 
 from jax.ops import segment_sum
 from functools import partial
@@ -58,15 +59,15 @@ class So3kratesLayer(BaseSubModule):
     @nn.compact
     def __call__(
         self,
-        x: jnp.ndarray,
-        chi: jnp.ndarray,
-        rbf_ij: jnp.ndarray,
-        sph_ij: jnp.ndarray,
-        phi_r_cut: jnp.ndarray,
-        idx_i: jnp.ndarray,
-        idx_j: jnp.ndarray,
-        pair_mask: jnp.ndarray,
-        point_mask: jnp.ndarray,
+        x: Float[jnp.ndarray, "node feature"],
+        ev: Float[jnp.ndarray, "node sphc_feature"],
+        rbf_ij: Float[jnp.ndarray, "pair K"],
+        ylm_ij: Float[jnp.ndarray, "pair order"],
+        cut: Float[jnp.ndarray, "pair"],
+        idx_i: Int[jnp.ndarray, "pair"],
+        idx_j: Int[jnp.ndarray, "pair"],
+        pair_mask: Bool[jnp.ndarray, "pair"],
+        point_mask: Bool[jnp.ndarray, "node"],
         *args,
         **kwargs,
     ):
@@ -74,10 +75,10 @@ class So3kratesLayer(BaseSubModule):
 
         Args:
             x (Array): Atomic features, shape: (n,F)
-            chi (Array): Spherical harmonic coordinates, shape: (n,m_tot)
+            ev (Array): Spherical harmonic coordinates, shape: (n,m_tot)
             rbf_ij (Array): RBF expanded distances, shape: (n_pairs,K)
-            sph_ij (Array): Spherical harmonics from i to j, shape: (n_pairs,m_tot)
-            phi_r_cut (Array): Output of the cutoff function feature block, shape: (n_pairs)
+            ylm_ij (Array): Spherical harmonics from i to j, shape: (n_pairs,m_tot)
+            cut (Array): Output of the cutoff function feature block, shape: (n_pairs)
             idx_i (Array): index centering atom, shape: (n_pairs)
             idx_j (Array): index neighboring atom, shape: (n_pairs)
             pair_mask (Array): index based mask to exclude pairs that come from index padding, shape: (n_pairs)
@@ -99,23 +100,23 @@ class So3kratesLayer(BaseSubModule):
             "The number of invariant features must be divisible by the spherical harmonics degree to comply with spherical self-attention requirements"
         )
 
-        self.sow("record", "chi_in", chi)
+        self.sow("record", "ev_in", ev)
 
-        chi_ij = safe_scale(
-            jax.vmap(lambda i, j: chi[j] - chi[i])(idx_i, idx_j),
+        ev_ij = safe_scale(
+            jax.vmap(lambda i, j: ev[j] - ev[i])(idx_i, idx_j),
             scale=pair_mask[:, None],
         )  # shape: (P,m_tot)
 
-        contraction_fn = make_l0_contraction_fn(self.degrees, dtype=chi.dtype)
-        m_chi_ij = contraction_fn(chi_ij)  # shape: (P,|l|)
+        contraction_fn = make_l0_contraction_fn(self.degrees, dtype=ev.dtype)
+        m_ev_ij = contraction_fn(ev_ij)  # shape: (P,|l|)
 
-        if self.chi_cut_dynamic:
+        if self.ev_cut_dynamic:
             raise RuntimeError(
                 "You should not end up here. Please report to "
                 "https://github.com/thorben-frank/mlff/issues"
             )
         else:
-            phi_chi_cut = jnp.zeros_like(phi_r_cut, dtype=phi_r_cut.dtype)
+            phi_ev_cut = jnp.zeros_like(cut, dtype=cut.dtype)
 
         # pre layer-normalization
         if self.layer_normalization:
@@ -132,27 +133,27 @@ class So3kratesLayer(BaseSubModule):
         )(
             x=x_pre_1,
             rbf_ij=rbf_ij,
-            d_chi_ij_l=m_chi_ij,
-            phi_r_cut=phi_r_cut,
+            d_ev_ij_l=m_ev_ij,
+            cut=cut,
             idx_i=idx_i,
             idx_j=idx_j,
             pair_mask=pair_mask,
         )  # shape: (n,F)
 
-        chi_local = GeometricBlock(
+        ev_local = GeometricBlock(
             filter=self.gb_filter,
             rad_filter_features=self.gb_rad_filter_features,
             sph_filter_features=self.gb_sph_filter_features,
             attention=self.gb_attention,
             degrees=self.degrees,
         )(
-            chi=chi,
-            sph_ij=sph_ij,
+            ev=ev,
+            ylm_ij=ylm_ij,
             x=x_pre_1,
             rbf_ij=rbf_ij,
-            d_chi_ij_l=m_chi_ij,
-            phi_r_cut=phi_r_cut,
-            phi_chi_cut=phi_chi_cut,
+            d_ev_ij_l=m_ev_ij,
+            cut=cut,
+            phi_ev_cut=phi_ev_cut,
             idx_i=idx_i,
             idx_j=idx_j,
             pair_mask=pair_mask,
@@ -166,11 +167,11 @@ class So3kratesLayer(BaseSubModule):
         if self.non_local_sphc:
             raise NotImplementedError
         else:
-            chi_non_local = jnp.float32(0.0)
+            ev_non_local = jnp.float32(0.0)
 
         # add local and potential non local features and sphc, respectively and first skip connection
         x_skip_1 = x + x_local + x_non_local
-        chi_skip_1 = chi + chi_local + chi_non_local
+        ev_skip_1 = ev + ev_local + ev_non_local
 
         if self.residual_mlp_1:
             x_skip_1 = ResidualMLP()(x_skip_1)
@@ -184,13 +185,13 @@ class So3kratesLayer(BaseSubModule):
             x_pre_2 = x_skip_1
 
         # feature <-> sphc interaction layer
-        delta_x, delta_chi = InteractionBlock(self.degrees, parity=self.parity)(
-            x_pre_2, chi_skip_1, point_mask
+        delta_x, delta_ev = InteractionBlock(self.degrees, parity=self.parity)(
+            x_pre_2, ev_skip_1, point_mask
         )
 
         # second skip connection
         x_skip_2 = x_skip_1 + delta_x
-        chi_skip_2 = chi_skip_1 + delta_chi
+        ev_skip_2 = ev_skip_1 + delta_ev
 
         if self.residual_mlp_2:
             x_skip_2 = ResidualMLP()(x_skip_2)
@@ -204,9 +205,9 @@ class So3kratesLayer(BaseSubModule):
             else:
                 x_skip_2 = x_skip_2
 
-        self.sow("record", "chi_out", chi_skip_2)
+        self.sow("record", "ev_out", ev_skip_2)
 
-        return {"x": x_skip_2, "chi": chi_skip_2}
+        return {"x": x_skip_2, "ev": ev_skip_2}
 
     def __dict_repr__(self) -> Dict[str, Dict[str, Any]]:
         return {
@@ -225,8 +226,8 @@ class So3kratesLayer(BaseSubModule):
                 "non_local_sphc": self.non_local_sphc,
                 "non_local_feature": self.non_local_feature,
                 "fast_attention_kwargs": self.fast_attention_kwargs,
-                "chi_cut": self.chi_cut,
-                "chi_cut_dynamic": self.chi_cut_dynamic,
+                "ev_cut": self.ev_cut,
+                "ev_cut_dynamic": self.ev_cut_dynamic,
                 "degrees": self.degrees,
                 "parity": self.parity,
                 "layer_normalization": self.layer_normalization,
@@ -268,8 +269,8 @@ class FeatureBlock(nn.Module):
         self,
         x: jnp.ndarray,
         rbf_ij: jnp.ndarray,
-        d_chi_ij_l: jnp.ndarray,
-        phi_r_cut: jnp.ndarray,
+        d_ev_ij_l: jnp.ndarray,
+        cut: jnp.ndarray,
         idx_i: jnp.ndarray,
         idx_j: jnp.ndarray,
         pair_mask: jnp.ndarray,
@@ -281,8 +282,8 @@ class FeatureBlock(nn.Module):
         Args:
             x (Array): Atomic features, shape: (n,F)
             rbf_ij (Array): RBF expanded distances, shape: (n_pairs,K)
-            d_chi_ij_l (Array): Per degree distances of SPHCs, shape: (n_all_pairs,|L|)
-            phi_r_cut (Array): Output of the cutoff function, shape: (n_pairs)
+            d_ev_ij_l (Array): Per degree distances of SPHCs, shape: (n_all_pairs,|L|)
+            cut (Array): Output of the cutoff function, shape: (n_pairs)
             idx_i (Array): index centering atom, shape: (n_pairs)
             idx_j (Array): index neighboring atom, shape: (n_pairs)
             pair_mask (Array): index based mask to exclude pairs that come from index padding, shape: (n_pairs)
@@ -292,11 +293,11 @@ class FeatureBlock(nn.Module):
         Returns:
 
         """
-        w_ij = self.filter_fn(rbf=rbf_ij, d_gamma=d_chi_ij_l)  # shape: (n_pairs,F)
+        w_ij = self.filter_fn(rbf=rbf_ij, d_gamma=d_ev_ij_l)  # shape: (n_pairs,F)
         x_ = self.attention_fn(
             x=x,
             w_ij=w_ij,
-            phi_r_cut=phi_r_cut,
+            cut=cut,
             idx_i=idx_i,
             idx_j=idx_j,
             pair_mask=pair_mask,
@@ -335,13 +336,13 @@ class GeometricBlock(nn.Module):
     @nn.compact
     def __call__(
         self,
-        chi: jnp.ndarray,
-        sph_ij: jnp.ndarray,
+        ev: jnp.ndarray,
+        ylm_ij: jnp.ndarray,
         x: jnp.ndarray,
         rbf_ij: jnp.ndarray,
-        d_chi_ij_l: jnp.ndarray,
-        phi_r_cut: jnp.ndarray,
-        phi_chi_cut: jnp.ndarray,
+        d_ev_ij_l: jnp.ndarray,
+        cut: jnp.ndarray,
+        phi_ev_cut: jnp.ndarray,
         idx_i: jnp.ndarray,
         idx_j: jnp.ndarray,
         pair_mask: jnp.ndarray,
@@ -351,13 +352,13 @@ class GeometricBlock(nn.Module):
         """
 
         Args:
-            chi (array): spherical coordinates for all orders l, shape: (n,m_tot)
-            sph_ij (array): spherical harmonics for all orders l, shape: (n_all_pairs,n,m_tot)
+            ev (array): spherical coordinates for all orders l, shape: (n,m_tot)
+            ylm_ij (array): spherical harmonics for all orders l, shape: (n_all_pairs,n,m_tot)
             x (array): atomic embeddings, shape: (n,F)
             rbf_ij (array): radial basis expansion of distances, shape: (n_pairs,K)
-            d_chi_ij_l (array): pairwise distance between spherical coordinates, shape: (n_all_pairs,|L|)
-            phi_r_cut (array): filter cutoff, shape: (n_pairs,L)
-            phi_chi_cut (array): cutoff that scales filter values based on distance in Spherical space,
+            d_ev_ij_l (array): pairwise distance between spherical coordinates, shape: (n_all_pairs,|L|)
+            cut (array): filter cutoff, shape: (n_pairs,L)
+            phi_ev_cut (array): cutoff that scales filter values based on distance in Spherical space,
                 shape: (n_all_pairs,|L|)
             idx_i (Array): index centering atom, shape: (n_pairs)
             idx_j (Array): index neighboring atom, shape: (n_pairs)
@@ -369,20 +370,20 @@ class GeometricBlock(nn.Module):
 
         """
         w_ij = safe_scale(
-            self.filter_fn(rbf=rbf_ij, d_gamma=d_chi_ij_l), scale=pair_mask[:, None]
+            self.filter_fn(rbf=rbf_ij, d_gamma=d_ev_ij_l), scale=pair_mask[:, None]
         )  # shape: (P,F)
-        chi_ = self.attention_fn(
-            chi=chi,
-            sph_ij=sph_ij,
+        ev_ = self.attention_fn(
+            ev=ev,
+            ylm_ij=ylm_ij,
             x=x,
             w_ij=w_ij,
-            phi_r_cut=phi_r_cut,
-            phi_chi_cut=phi_chi_cut,
+            cut=cut,
+            phi_ev_cut=phi_ev_cut,
             idx_i=idx_i,
             idx_j=idx_j,
             pair_mask=pair_mask,
         )  # shape: (n,m_tot)
-        return chi_  # shape: (n,m_tot)
+        return ev_  # shape: (n,m_tot)
 
 
 class InteractionBlock(nn.Module):
@@ -414,12 +415,12 @@ class InteractionBlock(nn.Module):
         self.contraction_fn = make_l0_contraction_fn(degrees=self.degrees)
 
     @nn.compact
-    def __call__(self, x, chi, point_mask, *args, **kwargs):
+    def __call__(self, x, ev, point_mask, *args, **kwargs):
         """
 
         Args:
             x (Array): shape: (n,F)
-            chi (Array): shape: (n,m_tot)
+            ev (Array): shape: (n,m_tot)
             point_mask (Array) shape: (n)
             *args ():
             **kwargs ():
@@ -430,16 +431,16 @@ class InteractionBlock(nn.Module):
         F = x.shape[-1]
         nl = len(self.degrees)
 
-        d_chi = self.contraction_fn(chi)  # shape: (n,|l|)
+        d_ev = self.contraction_fn(ev)  # shape: (n,|l|)
 
-        y = jnp.concatenate([x, d_chi], axis=-1)  # shape: (n,F+|l|)
+        y = jnp.concatenate([x, d_ev], axis=-1)  # shape: (n,F+|l|)
         a1, b1 = jnp.split(
             MLP(features=[int(F + nl)], activation_fn=silu)(y),
             indices_or_sections=[F],
             axis=-1,
         )
         # shape: (n,F) / shape: (n,n_l) / shape: (n,n_l)
-        return a1, self.repeat_fn(b1) * chi
+        return a1, self.repeat_fn(b1) * ev
 
 
 class InvariantFilter(nn.Module):
@@ -569,13 +570,13 @@ class ConvAttention(nn.Module):
         )
 
     @nn.compact
-    def __call__(self, x, w_ij, phi_r_cut, idx_i, idx_j, pair_mask, *args, **kwargs):
+    def __call__(self, x, w_ij, cut, idx_i, idx_j, pair_mask, *args, **kwargs):
         """
 
         Args:
             x (Array): atomic embeddings, shape: (n,F)
             w_ij (Array): filter, shape: (n_pairs,F)
-            phi_r_cut (Array): cutoff that scales attention coefficients, shape: (n_pairs)
+            cut (Array): cutoff that scales attention coefficients, shape: (n_pairs)
 
         Returns:
 
@@ -590,7 +591,7 @@ class ConvAttention(nn.Module):
             x_heads, w_heads, idx_i, idx_j
         )  # shape: (n_pairs,num_heads)
         alpha = safe_scale(
-            alpha, scale=pair_mask[:, None] * phi_r_cut[:, None]
+            alpha, scale=pair_mask[:, None] * cut[:, None]
         )  # shape: (n_pairs,num_heads)
 
         # save attention values for later analysis
@@ -628,12 +629,12 @@ class SphConvAttention(nn.Module):
     @nn.compact
     def __call__(
         self,
-        chi,
-        sph_ij,
+        ev,
+        ylm_ij,
         x,
         w_ij,
-        phi_r_cut,
-        phi_chi_cut,
+        cut,
+        phi_ev_cut,
         idx_i,
         idx_j,
         pair_mask,
@@ -643,12 +644,12 @@ class SphConvAttention(nn.Module):
         """
 
         Args:
-            chi (Array): spherical coordinates for all degrees l, shape: (n,m_tot)
-            sph_ij (Array): spherical harmonics for all degrees l, shape: (n_pairs,m_tot)
+            ev (Array): spherical coordinates for all degrees l, shape: (n,m_tot)
+            ylm_ij (Array): spherical harmonics for all degrees l, shape: (n_pairs,m_tot)
             x (Array): atomic embeddings, shape: (n,F)
             w_ij (Array): filter, shape: (n_pairs,F)
-            phi_r_cut (Array): cutoff that scales attention coefficients, shape: (n_pairs)
-            phi_chi_cut (Array): cutoff that scales filter values based on distance in spherical space,
+            cut (Array): cutoff that scales attention coefficients, shape: (n_pairs)
+            phi_ev_cut (Array): cutoff that scales filter values based on distance in spherical space,
                 shape: (n_pairs,n_l)
             idx_i (Array): index centering atom, shape: (n_pairs)
             idx_j (Array): index neighboring atom, shape: (n_pairs)
@@ -671,10 +672,10 @@ class SphConvAttention(nn.Module):
             x_heads, w_ij_heads, idx_i, idx_j
         )  # shape: (n_pairs,num_heads)
         alpha_r_ij = safe_scale(
-            alpha_ij, scale=pair_mask[:, None] * phi_r_cut[:, None]
+            alpha_ij, scale=pair_mask[:, None] * cut[:, None]
         )  # shape: (n_pairs,num_heads)
         alpha_s_ij = safe_scale(
-            alpha_ij, scale=pair_mask[:, None] * phi_chi_cut[:, None]
+            alpha_ij, scale=pair_mask[:, None] * phi_ev_cut[:, None]
         )  # shape: (n_pairs,num_heads)
         alpha_ij = alpha_r_ij + alpha_s_ij  # shape: (n_pairs,num_heads)
 
@@ -686,10 +687,10 @@ class SphConvAttention(nn.Module):
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
         alpha_ij = self.repeat_fn(alpha_ij)  # shape: (n_pairs,m_tot)
-        chi_ = segment_sum(
-            alpha_ij * sph_ij, segment_ids=idx_i, num_segments=x.shape[0]
+        ev_ = segment_sum(
+            alpha_ij * ylm_ij, segment_ids=idx_i, num_segments=x.shape[0]
         )  # shape: (n,m_tot)
-        return chi_
+        return ev_
 
 
 class ConvAttentionCoefficients(nn.Module):
