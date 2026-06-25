@@ -78,7 +78,7 @@ class Optimizer:
 
 
 def optimizer(
-    learning_rate,
+    learning_rate: float,
     b1: float = 0.9,
     b2: float = 0.999,
     eps: float = 1e-8,
@@ -94,8 +94,8 @@ def optimizer(
 
     Parameters
     ----------
-    learning_rate : _type_
-        _description_
+    learning_rate : float
+        The learning rate to be applied to the optimizer.
     b1 : float, optional
         Decay rate for the exponentially weighted average of grads, by default 0.9
     b2 : float, optional
