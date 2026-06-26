@@ -61,11 +61,13 @@ class XenophonLayerSparse(BaseSubModule):
         self,
         x: Float[jnp.ndarray, "node feature"],
         ev: Float[jnp.ndarray, "node sphc_feature"],
+        state_descriptor_node: Float[jnp.ndarray, "node"],
         rbf_ij: Float[jnp.ndarray, "pair K"],
         ylm_ij: Float[jnp.ndarray, "pair sphc_feature"],
         cut: Float[jnp.ndarray, "pair"],
         idx_i: Int[jnp.ndarray, "pair"],
         idx_j: Int[jnp.ndarray, "pair"],
+        state_descriptor_edge_ij: Float[jnp.ndarray, "pair"],
         *args,
         **kwargs,
     ) -> dict[
@@ -77,11 +79,13 @@ class XenophonLayerSparse(BaseSubModule):
         Args:
             x (Array): Node features, shape: (num_nodes, num_features)
             ev (Array): Euclidean variables, shape: (num_nodes, num_orders)
+            state_descriptor_node (Array): State descriptors associated with the nodes, shape: (num_nodes)
             rbf_ij (Array): RBF expanded distances, shape: (num_pairs, K)
             ylm_ij (Array): Spherical harmonics from i to j, shape: (num_pairs, num_orders)
             cut (Array): Output of the cutoff function feature block, shape: (num_pairs)
             idx_i (Array): index centering atom, shape: (num_pairs)
             idx_j (Array): index neighboring atom, shape: (num_pairs)
+            state_descriptor_edge_ij (Array): State descriptors associated with edges in the graph, shape: (num_nodes)
             *args ():
             **kwargs ():
 
