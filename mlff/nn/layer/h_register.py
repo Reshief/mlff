@@ -1,4 +1,7 @@
 from typing import Dict
+
+from .xenophon_layer_sparse import XenophonLayerSparse
+from .so3krates_layer_sparse import SO3kratesLayerSparse
 from .so3krates_layer import So3kratesLayer
 from .so3kratace_layer import So3krataceLayer
 from .schnet_layer import SchNetLayer
@@ -6,6 +9,10 @@ from .itp_layer import ITPLayer
 
 
 def get_layer(name: str, h: Dict):
+    if name == 'so3krates_layer_sparse':
+        return SO3kratesLayerSparse(**h)
+    if name == 'xenophon_layer_sparse':
+        return XenophonLayerSparse(**h)
     if name == 'so3krates_layer':
         return So3kratesLayer(**h)
     elif name == 'so3kratace_layer':
