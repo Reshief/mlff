@@ -37,8 +37,8 @@ class So3kratesLayer(BaseSubModule):
     non_local_sphc: bool = False
     non_local_feature: bool = False
     fast_attention_kwargs: Dict | None = None
-    chi_cut: float | None = None
-    chi_cut_dynamic: bool = False
+    ev_cut: float | None = None
+    ev_cut_dynamic: bool = False
     parity: bool = True
     layer_normalization: bool = False
     sphc_normalization: bool = False
@@ -46,9 +46,9 @@ class So3kratesLayer(BaseSubModule):
     module_name: str = "so3krates_layer"
 
     def setup(self):
-        self.chi_cut_fn = lambda y, *args, **kwargs: jnp.zeros(1)
+        self.ev_cut_fn = lambda y, *args, **kwargs: jnp.zeros(1)
 
-        if self.chi_cut is not None or self.chi_cut_dynamic is True:
+        if self.ev_cut is not None or self.ev_cut_dynamic is True:
             raise NotImplementedError(
                 "Improved version of non-local corrections will come soon. Stay tuned!"
             )
@@ -293,7 +293,7 @@ class FeatureBlock(nn.Module):
         Returns:
 
         """
-        w_ij = self.filter_fn(rbf=rbf_ij, d_gamma=d_ev_ij_l)  # shape: (n_pairs,F)
+        w_ij = self.filter_fn(rbf_ij=rbf_ij, d_ev_ij_l=d_ev_ij_l)  # shape: (n_pairs,F)
         x_ = self.attention_fn(
             x=x,
             w_ij=w_ij,
@@ -370,7 +370,7 @@ class GeometricBlock(nn.Module):
 
         """
         w_ij = safe_scale(
-            self.filter_fn(rbf=rbf_ij, d_gamma=d_ev_ij_l), scale=pair_mask[:, None]
+            self.filter_fn(rbf_ij=rbf_ij, d_ev_ij_l=d_ev_ij_l), scale=pair_mask[:, None]
         )  # shape: (P,F)
         ev_ = self.attention_fn(
             ev=ev,
@@ -625,7 +625,10 @@ class ConvAttention(nn.Module):
             w_ij, num_heads=self.num_heads
         )  # shape: (n_pairs,num_heads,F_head)
         alpha = self.coeff_fn()(
-            x_heads, w_heads, idx_i, idx_j, pair_mask=pair_mask
+            x_heads,
+            w_heads,
+            idx_i,
+            idx_j,  # , pair_mask=pair_mask
         )  # shape: (n_pairs,num_heads)
         alpha = safe_scale(
             alpha, scale=pair_mask[:, None] * cut[:, None]
@@ -637,7 +640,13 @@ class ConvAttention(nn.Module):
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
         x_ = inv_x_head_split(
-            self.aggregate_fn()(x_heads, alpha, idx_i, idx_j, pair_mask=pair_mask)
+            self.aggregate_fn()(
+                x_heads,
+                alpha,
+                idx_i,
+                idx_j,
+                # pair_mask=pair_mask
+            )
         )  # shape: (n,F)
         return x_
 
@@ -706,7 +715,10 @@ class SphConvAttention(nn.Module):
             w_ij, num_heads=self.num_heads
         )  # shape: (n_pairs,num_heads,F_head)
         alpha_ij = self.coeff_fn()(
-            x_heads, w_ij_heads, idx_i, idx_j, pair_mask=pair_mask
+            x_heads,
+            w_ij_heads,
+            idx_i,
+            idx_j,  # , pair_mask=pair_mask
         )  # shape: (n_pairs,num_heads)
         alpha_r_ij = safe_scale(
             alpha_ij, scale=pair_mask[:, None] * cut[:, None]
@@ -738,7 +750,7 @@ class ConvAttentionCoefficients(nn.Module):
         w_ij: Float[jnp.ndarray, "pair feature"],
         idx_i: Int[jnp.ndarray, "pair"],
         idx_j: Int[jnp.ndarray, "pair"],
-        pair_mask: Bool[jnp.ndarray, "pair"],
+        # pair_mask: Bool[jnp.ndarray, "pair"],
     ):
         """
 
@@ -766,7 +778,7 @@ class AttentionAggregation(nn.Module):
         alpha_ij: Float[jnp.ndarray, "pair"],
         idx_i: Int[jnp.ndarray, "pair"],
         idx_j: Int[jnp.ndarray, "pair"],
-        pair_mask: Bool[jnp.ndarray, "pair"],
+        # pair_mask: Bool[jnp.ndarray, "pair"],
     ) -> jnp.ndarray:
         """
 

@@ -160,8 +160,8 @@ class GeometryEmbed(BaseSubModule):
             "unit_r_ij": unit_r_ij,
             "d_ij": d_ij,
             "rbf_ij": rbf_ij,
-            "phi_r_cut": phi_r_cut,
-            "sph_ij": sph_harms_ij,
+            "cut": phi_r_cut,
+            "ylm_ij": sph_harms_ij,
         }
 
         # Spherical harmonic coordinates (SPHCs)
@@ -236,11 +236,11 @@ def _init_sphc(
     _sph_harms_ij = safe_scale(sph_ij, phi_r_cut[:, None])  # shape: (n_pairs,m_tot)
     chi = segment_sum(_sph_harms_ij, segment_ids=idx_i, num_segments=len(z))
     chi = safe_scale(chi, scale=point_mask[:, None])  # shape: (n,m_tot)
-    return {"chi": chi / mp_normalization}
+    return {"ev": chi / mp_normalization}
 
 
 def _init_sphc_zeros(z, sph_ij, *args, **kwargs):
-    return {"chi": jnp.zeros((z.shape[-1], sph_ij.shape[-1]), dtype=sph_ij.dtype)}
+    return {"ev": jnp.zeros((z.shape[-1], sph_ij.shape[-1]), dtype=sph_ij.dtype)}
 
 
 class AtomTypeEmbed(BaseSubModule):
