@@ -14,6 +14,8 @@ from mlff.nn.stacknet import get_obs_and_force_fn, get_observable_fn, get_energy
 from mlff.nn import So3krates
 from mlff.properties import md17_property_keys as prop_keys
 
+from pathlib import Path
+
 import mlff.properties.property_names as pn
 
 if sys.platform != "win32":
@@ -21,11 +23,12 @@ if sys.platform != "win32":
     port = portpicker.pick_unused_port()
     jax.distributed.initialize(f'localhost:{port}', num_processes=1, process_id=0)
 
-data_path = 'example_data/ethanol.npz'
-save_path = 'ckpt_dir'
+data_path = Path('example_data/ethanol.npz')
+save_path = Path('ckpt_dir')
 
-ckpt_dir = os.path.join(save_path, 'module')
-ckpt_dir = create_directory(ckpt_dir, exists_ok=False)
+ckpt_dir_path = save_path / 'module'
+ckpt_dir_abspath = ckpt_dir_path.absolute().as_posix()
+ckpt_dir = create_directory(ckpt_dir_path, exists_ok=False)
 
 E_key = prop_keys['energy']
 F_key = prop_keys['force']
@@ -49,8 +52,8 @@ data_set.random_split(n_train=200,
 
 data_set.shift_x_by_mean_x(x=pn.energy)
 
-data_set.save_splits_to_file(ckpt_dir, 'splits.json')
-data_set.save_scales(ckpt_dir, 'scales.json')
+data_set.save_splits_to_file(ckpt_dir_abspath, 'splits.json')
+data_set.save_scales(ckpt_dir_abspath, 'scales.json')
 
 d = data_set.get_data_split()
 
@@ -76,7 +79,7 @@ coach = Coach(inputs=[pn.atomic_position, pn.atomic_type, pn.idx_i, pn.idx_j, pn
               training_batch_size=5,
               validation_batch_size=5,
               loss_weights={pn.energy: .01, pn.force: 0.99},
-              ckpt_dir=ckpt_dir,
+              ckpt_dir=ckpt_dir_abspath,
               data_path=data_path,
               net_seed=0,
               training_seed=0)
@@ -111,7 +114,7 @@ h_opt = opt.__dict_repr__()
 h_coach = coach.__dict_repr__()
 h_dataset = data_set.__dict_repr__()
 h = bundle_dicts([h_net, h_opt, h_coach, h_dataset, h_train_state])
-save_dict(path=ckpt_dir, filename='hyperparameters.json', data=h, exists_ok=True)
+save_dict(path=ckpt_dir_abspath, filename='hyperparameters.json', data=h, exists_ok=True)
 
 wandb.init(config=h)
 coach.run(train_state=train_state,
